@@ -1,0 +1,6 @@
+docs/*
+.claude/*
+
+# Rust / Soroban build artifacts
+target/
+**/*.wasm

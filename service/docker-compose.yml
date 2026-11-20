@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: eatovr-proof-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: eatovr_proof
+      POSTGRES_PASSWORD: eatovr_proof
+      POSTGRES_DB: eatovr_proof
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - eatovr-proof-postgres-data:/var/lib/postgresql/data
+
+volumes:
+  eatovr-proof-postgres-data:

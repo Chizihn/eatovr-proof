@@ -59,9 +59,9 @@ or stablecoins, by design.
 | Path | What | Status |
 |---|---|---|
 | `contracts/attestation-registry/` | The `AttestationRegistry` Soroban contract | **Built, tested, deployed to testnet** — see below |
-| `service/` | Standalone Attestation Service — relays app confirm actions into contract calls, indexes finalized events into Postgres | Not started |
+| `service/` | Standalone Attestation Service — relays app confirm actions into contract calls, indexes finalized events into Postgres | **Built, proven end-to-end on testnet** — see below |
 | `dashboard/` | Public Next.js site showing aggregate verified numbers, each linking to its on-chain transaction | Not started |
-| `demo-client/` | Mock client that calls the service exactly the way the real Eatovr app will, so anyone can run and verify the whole loop independently | Not started |
+| `demo-client/` | Mock client that calls the service exactly the way the real Eatovr app will, so anyone can run and verify the whole loop independently | **Built, proven end-to-end on testnet** — see below |
 
 ## Proof it works
 
@@ -84,6 +84,15 @@ Full detail, including the failure cases the contract rejects (wrong
 recipient confirming, double-confirming, a vendor naming itself as the
 recipient) and how to build/test/deploy it yourself, is in
 [`contracts/README.md`](contracts/README.md).
+
+That first proof called the contract directly through the Stellar CLI.
+The Attestation Service and demo client have since reproduced the same
+two-party flow through the actual API surface the real app will use —
+the service builds an unsigned transaction, the caller signs it locally
+(never sharing a private key with the service), and the service's own
+indexer picks up the result into its Postgres read model within
+seconds. See [`service/README.md`](service/README.md) for that run's
+transaction links.
 
 **Honesty note:** no real vendor is onboarded to this yet, and Eatovr's
 main backend API isn't live. The above is seeded demo accounts on

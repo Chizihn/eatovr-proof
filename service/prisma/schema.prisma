@@ -1,0 +1,38 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// The read model. Source of truth is always the chain; this table is
+// rebuilt from `claimed`/`finalized` contract events by the indexer, never
+// written to directly by the relay routes.
+model Attestation {
+  claimId       BigInt    @id @map("claim_id")
+  vendor        String
+  recipient     String
+  itemType      String    @map("item_type")
+  quantity      Int
+  status        String // "Pending" | "Finalized"
+  claimedAt     DateTime  @map("claimed_at")
+  confirmedAt   DateTime? @map("confirmed_at")
+  claimTxHash   String    @map("claim_tx_hash")
+  confirmTxHash String?   @map("confirm_tx_hash")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@map("attestations")
+}
+
+// Where the indexer left off, so a restart resumes instead of
+// re-scanning the whole ledger history.
+model IndexerCursor {
+  id         Int      @id @default(1)
+  lastLedger BigInt   @map("last_ledger")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@map("indexer_cursor")
+}

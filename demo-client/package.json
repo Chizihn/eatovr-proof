@@ -1,0 +1,19 @@
+{
+  "name": "demo-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Stands in for the real Eatovr app: calls the Attestation Service exactly the way the app's passkey wallet eventually will — signing locally, never sending a private key to the service.",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@stellar/stellar-sdk": "17.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
+  }
+}

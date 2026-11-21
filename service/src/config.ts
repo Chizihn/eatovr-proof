@@ -15,4 +15,5 @@ export const config = {
   networkPassphrase: required("NETWORK_PASSPHRASE"),
   contractId: required("CONTRACT_ID"),
   indexerPollIntervalMs: Number(process.env.INDEXER_POLL_INTERVAL_MS ?? 5000),
+  sponsorSecret: required("SPONSOR_SECRET"),
 };

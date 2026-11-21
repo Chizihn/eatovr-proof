@@ -23,6 +23,37 @@ contract and writes `claimed`/`finalized` events into the `attestations`
 table — this is the only thing that writes the read model; the relay
 routes never write to it directly.
 
+### Relayer (for passkey/smart-wallet callers)
+
+A separate set of routes (`GET /`, `POST /`, `GET /status`) implements
+the plain HTTP "relayer" contract `smart-account-kit` and similar
+passkey/smart-wallet SDKs expect — see
+`docs/PASSKEY_ATTESTATION_INTEGRATION_PLAN.md` in the Eatovr repo. A
+dedicated `SPONSOR_SECRET` account pays network fees on behalf of
+passkey-controlled wallets, which don't hold XLM themselves — it has
+no authority over any attestation, only ever pays fees. The response
+shape (`{ success, hash?, status?, error?, errorCode? }`, always HTTP
+200) was checked directly against `smart-account-kit`'s own published
+`RelayerResponse` type — not guessed — since the kit branches on
+`success` in the body rather than the HTTP status. Two input shapes,
+both proxying to the same submit-and-wait logic the `/pickups` routes
+use:
+
+- `{ xdr }` — an already-signed transaction; wrapped in a fee-bump
+  envelope (doesn't disturb the inner transaction's own
+  signatures/auth) and submitted. **Proven on real testnet**, twice —
+  once before and once after the response-shape fix above — with a
+  transaction signed by an unrelated throwaway account.
+- `{ func, auth }` — a host function + pre-signed Soroban authorization
+  entries, no funded account required from the caller; the sponsor
+  account builds and pays for the transaction around them. Implemented
+  per the documented protocol, but **not yet proven working** — a
+  hand-built test (approximating what `smart-account-kit` does
+  internally) hit `HostError: Error(Auth, InvalidAction)` during
+  simulation. Revisit once the mobile app is actually producing real
+  signed auth entries to test against, rather than a hand-rolled
+  approximation.
+
 ## Status
 
 Proven end-to-end on testnet: a vendor identity claimed a pickup, a
@@ -93,6 +124,9 @@ flow end to end.
 | `/transactions/submit` | POST | `xdr` (signed) | Submits and waits; returns `{ status, hash, returnValue }` |
 | `/pickups` | GET | — | Read model, newest first |
 | `/pickups/:claimId` | GET | — | One record from the read model |
+| `/` | POST | `{ xdr }` or `{ func, auth }` | Relayer: fee-sponsored submit for passkey wallets |
+| `/` | GET | — | Relayer health check |
+| `/status` | GET | — | Relayer status (caller IP, network) |
 
 ## Stack
 

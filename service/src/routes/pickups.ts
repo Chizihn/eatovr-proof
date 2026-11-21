@@ -85,6 +85,21 @@ export async function pickupRoutes(app: FastifyInstance) {
     return rows.map(serializeAttestation);
   });
 
+  // Resolves a claim from a transaction hash — lets a caller that only
+  // has a tx hash (e.g. a smart-wallet SDK whose submit result doesn't
+  // surface the contract's return value) find the claim id it was
+  // assigned, from the indexed read model rather than guessing.
+  app.get<{ Params: { txHash: string } }>("/pickups/by-tx/:txHash", async (request, reply) => {
+    const { txHash } = request.params;
+    const row = await prisma.attestation.findFirst({
+      where: { OR: [{ claimTxHash: txHash }, { confirmTxHash: txHash }] },
+    });
+    if (!row) {
+      return reply.status(404).send({ error: "not found" });
+    }
+    return serializeAttestation(row);
+  });
+
   app.get<{ Params: { claimId: string } }>("/pickups/:claimId", async (request, reply) => {
     let claimId: bigint;
     try {

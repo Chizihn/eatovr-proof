@@ -1,6 +1,8 @@
 import {
   rpc,
   Contract,
+  Transaction,
+  FeeBumpTransaction,
   TransactionBuilder,
   Address,
   nativeToScVal,
@@ -12,6 +14,44 @@ import { withRetry } from "./retry.js";
 
 export const sorobanServer = new rpc.Server(config.sorobanRpcUrl);
 export const attestationContract = new Contract(config.contractId);
+
+/**
+ * Submits an already-signed transaction and waits for it to land.
+ * Shared by both the self-funded flow (`submitSignedTransaction`, the
+ * caller's own account pays its own fee) and the relayer (`relayer.ts`,
+ * for passkey wallets that don't hold XLM to pay a fee themselves).
+ */
+export async function submitAndWait(tx: Transaction | FeeBumpTransaction): Promise<{
+  status: string;
+  hash: string;
+  returnValue?: unknown;
+}> {
+  const sendResult = await sorobanServer.sendTransaction(tx);
+
+  if (sendResult.status === "ERROR") {
+    throw new Error(`Transaction submission failed: ${JSON.stringify(sendResult.errorResult)}`);
+  }
+
+  const hash = sendResult.hash;
+
+  let getResult = await sorobanServer.getTransaction(hash);
+  const deadline = Date.now() + 30_000;
+  while (
+    getResult.status === rpc.Api.GetTransactionStatus.NOT_FOUND &&
+    Date.now() < deadline
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    getResult = await sorobanServer.getTransaction(hash);
+  }
+
+  if (getResult.status !== rpc.Api.GetTransactionStatus.SUCCESS) {
+    throw new Error(`Transaction did not succeed: ${getResult.status}`);
+  }
+
+  const returnValue = getResult.returnValue ? scValToNative(getResult.returnValue) : undefined;
+
+  return { status: getResult.status, hash, returnValue };
+}
 
 async function buildAndPrepare(sourcePublicKey: string, operation: ReturnType<Contract["call"]>) {
   const sourceAccount = await withRetry(() => sorobanServer.getAccount(sourcePublicKey));
@@ -82,29 +122,5 @@ export async function submitSignedTransaction(signedXdr: string): Promise<{
   returnValue?: unknown;
 }> {
   const tx = TransactionBuilder.fromXDR(signedXdr, config.networkPassphrase);
-  const sendResult = await sorobanServer.sendTransaction(tx);
-
-  if (sendResult.status === "ERROR") {
-    throw new Error(`Transaction submission failed: ${JSON.stringify(sendResult.errorResult)}`);
-  }
-
-  const hash = sendResult.hash;
-
-  let getResult = await sorobanServer.getTransaction(hash);
-  const deadline = Date.now() + 30_000;
-  while (
-    getResult.status === rpc.Api.GetTransactionStatus.NOT_FOUND &&
-    Date.now() < deadline
-  ) {
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    getResult = await sorobanServer.getTransaction(hash);
-  }
-
-  if (getResult.status !== rpc.Api.GetTransactionStatus.SUCCESS) {
-    throw new Error(`Transaction did not succeed: ${getResult.status}`);
-  }
-
-  const returnValue = getResult.returnValue ? scValToNative(getResult.returnValue) : undefined;
-
-  return { status: getResult.status, hash, returnValue };
+  return submitAndWait(tx);
 }

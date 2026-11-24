@@ -1,5 +1,5 @@
 export type Attestation = {
-  claimId: string;
+  orderId: string;
   vendor: string;
   recipient: string;
   itemType: string;

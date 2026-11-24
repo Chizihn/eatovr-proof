@@ -10,7 +10,7 @@ import {
 
 function serializeAttestation(row: Attestation) {
   return {
-    claimId: row.claimId.toString(),
+    orderId: row.orderId,
     vendor: row.vendor,
     recipient: row.recipient,
     itemType: row.itemType,
@@ -30,8 +30,10 @@ export async function pickupRoutes(app: FastifyInstance) {
   // this service never receives a private key. ---
 
   app.post<{
+    Params: { orderId: string };
     Body: { vendorPublicKey: string; recipientPublicKey: string; itemType: string; quantity: number };
-  }>("/pickups/claim/prepare", async (request, reply) => {
+  }>("/pickups/:orderId/claim/prepare", async (request, reply) => {
+    const { orderId } = request.params;
     const { vendorPublicKey, recipientPublicKey, itemType, quantity } = request.body ?? {};
     if (!vendorPublicKey || !recipientPublicKey || !itemType || !quantity) {
       return reply
@@ -39,29 +41,59 @@ export async function pickupRoutes(app: FastifyInstance) {
         .send({ error: "vendorPublicKey, recipientPublicKey, itemType and quantity are required" });
     }
 
-    const xdr = await buildClaimPickupTx({ vendorPublicKey, recipientPublicKey, itemType, quantity });
+    const xdr = await buildClaimPickupTx({ orderId, vendorPublicKey, recipientPublicKey, itemType, quantity });
     return { xdr, networkPassphrase: config.networkPassphrase };
   });
 
-  app.post<{ Params: { claimId: string }; Body: { recipientPublicKey: string } }>(
-    "/pickups/:claimId/confirm/prepare",
+  app.post<{ Params: { orderId: string }; Body: { recipientPublicKey: string } }>(
+    "/pickups/:orderId/confirm/prepare",
     async (request, reply) => {
       const { recipientPublicKey } = request.body ?? {};
       if (!recipientPublicKey) {
         return reply.status(400).send({ error: "recipientPublicKey is required" });
       }
 
-      let claimId: bigint;
-      try {
-        claimId = BigInt(request.params.claimId);
-      } catch {
-        return reply.status(400).send({ error: "claimId must be an integer" });
-      }
-
-      const xdr = await buildConfirmPickupTx({ claimId, recipientPublicKey });
+      const xdr = await buildConfirmPickupTx({ orderId: request.params.orderId, recipientPublicKey });
       return { xdr, networkPassphrase: config.networkPassphrase };
     },
   );
+
+  // --- Deferred confirm: the recipient signs `confirm_pickup` at
+  // checkout (before `claim_pickup` exists) and this just stores it.
+  // The indexer (src/indexer/run.ts) submits it automatically once the
+  // matching `claimed` event lands — see schema.prisma's
+  // `PendingConfirmation` model for why this is safe to defer. ---
+  app.post<{
+    Params: { orderId: string };
+    Body: { recipientPublicKey: string; func: string; auth: string[] };
+  }>("/pickups/:orderId/pre-confirm", async (request, reply) => {
+    const { orderId } = request.params;
+    const { recipientPublicKey, func, auth } = request.body ?? {};
+    if (!recipientPublicKey || !func || !auth?.length) {
+      return reply
+        .status(400)
+        .send({ error: "recipientPublicKey, func and a non-empty auth array are required" });
+    }
+
+    const existing = await prisma.attestation.findUnique({ where: { orderId } });
+    if (existing) {
+      return reply
+        .status(409)
+        .send({ error: "This order has already been claimed — too late to pre-confirm, confirm directly instead" });
+    }
+
+    await prisma.pendingConfirmation.upsert({
+      where: { orderId },
+      create: { orderId, recipient: recipientPublicKey, funcXdr: func, authXdr: auth },
+      // A re-checkout (e.g. retried payment) for the same order replaces
+      // the stored authorization rather than erroring — the old one was
+      // never submitted (that path returns 409 above) so there's
+      // nothing to protect by refusing the overwrite.
+      update: { recipient: recipientPublicKey, funcXdr: func, authXdr: auth, submitError: null },
+    });
+
+    return reply.status(201).send({ stored: true });
+  });
 
   app.post<{ Body: { xdr: string } }>("/transactions/submit", async (request, reply) => {
     const { xdr } = request.body ?? {};
@@ -69,7 +101,8 @@ export async function pickupRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: "xdr is required" });
     }
     const result = await submitSignedTransaction(xdr);
-    // BigInt (e.g. a u64 claim_id) isn't JSON-serializable by default.
+    // BigInt return values (e.g. a u64/u128 from some other contract call
+    // through this generic endpoint) aren't JSON-serializable by default.
     return {
       ...result,
       returnValue:
@@ -100,15 +133,8 @@ export async function pickupRoutes(app: FastifyInstance) {
     return serializeAttestation(row);
   });
 
-  app.get<{ Params: { claimId: string } }>("/pickups/:claimId", async (request, reply) => {
-    let claimId: bigint;
-    try {
-      claimId = BigInt(request.params.claimId);
-    } catch {
-      return reply.status(400).send({ error: "claimId must be an integer" });
-    }
-
-    const row = await prisma.attestation.findUnique({ where: { claimId } });
+  app.get<{ Params: { orderId: string } }>("/pickups/:orderId", async (request, reply) => {
+    const row = await prisma.attestation.findUnique({ where: { orderId: request.params.orderId } });
     if (!row) {
       return reply.status(404).send({ error: "not found" });
     }

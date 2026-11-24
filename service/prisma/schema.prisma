@@ -10,8 +10,15 @@ datasource db {
 // The read model. Source of truth is always the chain; this table is
 // rebuilt from `claimed`/`finalized` contract events by the indexer, never
 // written to directly by the relay routes.
+//
+// Keyed by `orderId` (Eatovr's own order id), not an on-chain-minted
+// sequential id — the contract itself is keyed this way now (see
+// contracts/attestation-registry/src/lib.rs's `DataKey::Claim` comment)
+// specifically so the recipient's `confirm_pickup` can be signed at
+// checkout, before `claim_pickup` ever runs. See `PendingConfirmation`
+// below for the other half of that flow.
 model Attestation {
-  claimId       BigInt    @id @map("claim_id")
+  orderId       String    @id @map("order_id")
   vendor        String
   recipient     String
   itemType      String    @map("item_type")
@@ -25,6 +32,33 @@ model Attestation {
   updatedAt     DateTime  @updatedAt @map("updated_at")
 
   @@map("attestations")
+}
+
+// A recipient's `confirm_pickup` authorization, signed with their
+// passkey at checkout — before the vendor has claimed anything, while
+// the recipient is already in the app paying. Stored here, unsubmitted,
+// until the indexer observes the matching `claimed` event for the same
+// `orderId`, at which point it submits this automatically via the
+// relayer (`relayFuncAndAuth`) — no further action from the recipient.
+// This is the actual trust/UX trade this flow makes: the signature
+// still genuinely comes from the recipient's own passkey (unchanged
+// security property); only *when it gets submitted on-chain* is
+// decoupled from *when it was signed*.
+model PendingConfirmation {
+  orderId      String    @id @map("order_id")
+  recipient    String
+  // base64 XDR: xdr.HostFunction (the confirm_pickup invocation) and
+  // its one xdr.SorobanAuthorizationEntry (the recipient's signature) —
+  // the exact shape `relayFuncAndAuth` already takes.
+  funcXdr      String    @map("func_xdr")
+  authXdr      String[]  @map("auth_xdr")
+  submittedAt  DateTime? @map("submitted_at")
+  submitTxHash String?   @map("submit_tx_hash")
+  submitError  String?   @map("submit_error")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  @@map("pending_confirmations")
 }
 
 // Where the indexer left off, so a restart resumes instead of

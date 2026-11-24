@@ -74,8 +74,13 @@ async function buildAndPrepare(sourcePublicKey: string, operation: ReturnType<Co
  * contract's `vendor.require_auth()`). The caller signs this XDR with
  * the vendor's key and posts it to `/pickups/claim/submit` — this
  * service never sees or holds a vendor/recipient private key.
+ *
+ * `orderId` is Eatovr's own order id (the contract's `DataKey::Claim`
+ * key — see contracts/attestation-registry/src/lib.rs), not an
+ * on-chain-minted id.
  */
 export async function buildClaimPickupTx(params: {
+  orderId: string;
   vendorPublicKey: string;
   recipientPublicKey: string;
   itemType: string;
@@ -83,6 +88,7 @@ export async function buildClaimPickupTx(params: {
 }): Promise<string> {
   const operation = attestationContract.call(
     "claim_pickup",
+    nativeToScVal(params.orderId, { type: "string" }),
     new Address(params.vendorPublicKey).toScVal(),
     new Address(params.recipientPublicKey).toScVal(),
     nativeToScVal(params.itemType, { type: "string" }),
@@ -95,15 +101,18 @@ export async function buildClaimPickupTx(params: {
 /**
  * Builds an unsigned `confirm_pickup` transaction with the recipient as
  * the transaction source, mirroring `buildClaimPickupTx` for the other
- * party in the two-party flow.
+ * party in the two-party flow. `orderId` already exists at checkout —
+ * this can be built and signed before `claim_pickup` ever runs; see
+ * `routes/pickups.ts`'s `/pickups/:orderId/pre-confirm` for the
+ * deferred-submission path that relies on that.
  */
 export async function buildConfirmPickupTx(params: {
-  claimId: bigint;
+  orderId: string;
   recipientPublicKey: string;
 }): Promise<string> {
   const operation = attestationContract.call(
     "confirm_pickup",
-    nativeToScVal(params.claimId, { type: "u64" }),
+    nativeToScVal(params.orderId, { type: "string" }),
     new Address(params.recipientPublicKey).toScVal(),
   );
 

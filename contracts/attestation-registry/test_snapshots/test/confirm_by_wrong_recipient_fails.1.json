@@ -15,6 +15,9 @@
               "function_name": "claim_pickup",
               "args": [
                 {
+                  "string": "order-bread-001"
+                },
+                {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
@@ -55,7 +58,7 @@
                   "symbol": "Claim"
                 },
                 {
-                  "u64": 0
+                  "string": "order-bread-001"
                 }
               ]
             },
@@ -75,7 +78,7 @@
                       "symbol": "Claim"
                     },
                     {
-                      "u64": 0
+                      "string": "order-bread-001"
                     }
                   ]
                 },
@@ -173,20 +176,7 @@
                     "executable": {
                       "wasm": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
                     },
-                    "storage": [
-                      {
-                        "key": {
-                          "vec": [
-                            {
-                              "symbol": "NextId"
-                            }
-                          ]
-                        },
-                        "val": {
-                          "u64": 1
-                        }
-                      }
-                    ]
+                    "storage": null
                   }
                 }
               }

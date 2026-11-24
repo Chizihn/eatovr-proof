@@ -25,8 +25,17 @@ pub struct Claim {
 
 #[contracttype]
 pub enum DataKey {
-    NextId,
-    Claim(u64),
+    // Keyed by the order's own id (a UUID string from Eatovr's existing
+    // Order model), not an auto-incremented counter. This is the whole
+    // point of this version: the order id exists at purchase time,
+    // *before* either party claims or confirms anything, so the
+    // recipient can sign a `confirm_pickup` authorization ahead of time
+    // (at checkout) referencing an id that already exists — instead of
+    // needing to wait for `claim_pickup` to mint a fresh claim id before
+    // there's anything to sign. See
+    // docs/PASSKEY_ATTESTATION_INTEGRATION_PLAN.md's deferred-confirm
+    // section for the full flow this enables.
+    Claim(String),
 }
 
 #[contracterror]
@@ -38,6 +47,7 @@ pub enum Error {
     RecipientMismatch = 3,
     VendorIsRecipient = 4,
     ZeroQuantity = 5,
+    ClaimAlreadyExists = 6,
 }
 
 #[contract]
@@ -49,15 +59,18 @@ impl AttestationRegistry {
     /// recipient who is expected to confirm it. Only `vendor`'s own
     /// authorization can create a claim on their behalf.
     ///
-    /// Returns the new claim's id. The claim stays `Pending` until the
-    /// recipient independently confirms it with `confirm_pickup`.
+    /// `order_id` is Eatovr's own order id, supplied by the caller
+    /// (not minted here) — see `DataKey::Claim`'s doc comment for why.
+    /// The claim stays `Pending` until the recipient independently
+    /// confirms it with `confirm_pickup`.
     pub fn claim_pickup(
         env: Env,
+        order_id: String,
         vendor: Address,
         recipient: Address,
         item_type: String,
         quantity: u32,
-    ) -> Result<u64, Error> {
+    ) -> Result<(), Error> {
         vendor.require_auth();
 
         if vendor == recipient {
@@ -66,12 +79,13 @@ impl AttestationRegistry {
         if quantity == 0 {
             return Err(Error::ZeroQuantity);
         }
-
-        let id: u64 = env
+        if env
             .storage()
-            .instance()
-            .get(&DataKey::NextId)
-            .unwrap_or(0);
+            .persistent()
+            .has(&DataKey::Claim(order_id.clone()))
+        {
+            return Err(Error::ClaimAlreadyExists);
+        }
 
         let claim = Claim {
             vendor: vendor.clone(),
@@ -83,30 +97,39 @@ impl AttestationRegistry {
             status: ClaimStatus::Pending,
         };
 
-        env.storage().persistent().set(&DataKey::Claim(id), &claim);
-        env.storage().instance().set(&DataKey::NextId, &(id + 1));
+        env.storage()
+            .persistent()
+            .set(&DataKey::Claim(order_id.clone()), &claim);
 
         env.events().publish(
-            (symbol_short!("claimed"), id),
+            (symbol_short!("claimed"), order_id),
             (vendor, recipient, item_type, quantity),
         );
 
-        Ok(id)
+        Ok(())
     }
 
-    /// Recipient independently confirms a specific claim. Only the
-    /// recipient named on the claim can confirm it, and only their own
-    /// authorization can do so — the vendor cannot confirm on their
-    /// behalf. Finalizing requires both this call and the earlier
-    /// `claim_pickup` auth check to have passed; there is no path that
-    /// finalizes a record from a single party.
-    pub fn confirm_pickup(env: Env, claim_id: u64, recipient: Address) -> Result<(), Error> {
+    /// Recipient independently confirms a specific claim, by the same
+    /// `order_id` `claim_pickup` used. Only the recipient named on the
+    /// claim can confirm it, and only their own authorization can do
+    /// so — the vendor cannot confirm on their behalf. Finalizing
+    /// requires both this call and the earlier `claim_pickup` auth
+    /// check to have passed; there is no path that finalizes a record
+    /// from a single party.
+    ///
+    /// This call's authorization entry can be produced and signed by
+    /// the recipient *before* `claim_pickup` ever runs (e.g. at
+    /// checkout, since `order_id` already exists then) and submitted
+    /// later by anyone holding that signed entry — `require_auth()`
+    /// only checks that the recipient signed this exact call, not when
+    /// the signature was produced or who relayed it on-chain.
+    pub fn confirm_pickup(env: Env, order_id: String, recipient: Address) -> Result<(), Error> {
         recipient.require_auth();
 
         let mut claim: Claim = env
             .storage()
             .persistent()
-            .get(&DataKey::Claim(claim_id))
+            .get(&DataKey::Claim(order_id.clone()))
             .ok_or(Error::ClaimNotFound)?;
 
         if claim.recipient != recipient {
@@ -120,10 +143,10 @@ impl AttestationRegistry {
         claim.status = ClaimStatus::Finalized;
         env.storage()
             .persistent()
-            .set(&DataKey::Claim(claim_id), &claim);
+            .set(&DataKey::Claim(order_id.clone()), &claim);
 
         env.events().publish(
-            (symbol_short!("finalized"), claim_id),
+            (symbol_short!("finalized"), order_id),
             (
                 claim.vendor,
                 claim.recipient,
@@ -137,10 +160,10 @@ impl AttestationRegistry {
         Ok(())
     }
 
-    pub fn get_claim(env: Env, claim_id: u64) -> Result<Claim, Error> {
+    pub fn get_claim(env: Env, order_id: String) -> Result<Claim, Error> {
         env.storage()
             .persistent()
-            .get(&DataKey::Claim(claim_id))
+            .get(&DataKey::Claim(order_id))
             .ok_or(Error::ClaimNotFound)
     }
 }

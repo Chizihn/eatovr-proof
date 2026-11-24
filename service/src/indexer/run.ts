@@ -2,6 +2,7 @@ import { prisma } from "../db/prisma.js";
 import { sorobanServer } from "../soroban/client.js";
 import { fetchEventsSince, type AttestationEvent } from "../soroban/events.js";
 import { withRetry } from "../soroban/retry.js";
+import { relayFuncAndAuth } from "../soroban/relayer.js";
 
 const CURSOR_ID = 1;
 
@@ -25,12 +26,46 @@ async function saveCursor(ledger: number): Promise<void> {
   });
 }
 
+/**
+ * If the recipient already signed (but didn't submit) a `confirm_pickup`
+ * for this order at checkout — see `PendingConfirmation` in
+ * schema.prisma — submit it now that the matching `claimed` event has
+ * landed. This is the automatic half of the deferred-confirm flow: the
+ * recipient never has to come back and tap anything.
+ *
+ * Deliberately swallows (logs, doesn't throw) submission failures —
+ * this runs inside the indexer's poll loop, and one order's stuck
+ * pending confirmation must not block indexing every other event.
+ * Left with `submittedAt: null` on failure so the next poll retries it.
+ */
+async function submitPendingConfirmationIfAny(orderId: string): Promise<void> {
+  const pending = await prisma.pendingConfirmation.findUnique({
+    where: { orderId },
+  });
+  if (!pending || pending.submittedAt) return;
+
+  try {
+    const result = await relayFuncAndAuth(pending.funcXdr, pending.authXdr);
+    await prisma.pendingConfirmation.update({
+      where: { orderId },
+      data: { submittedAt: new Date(), submitTxHash: result.hash, submitError: null },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[indexer] deferred confirm_pickup submit failed for order ${orderId}:`, err);
+    await prisma.pendingConfirmation.update({
+      where: { orderId },
+      data: { submitError: message },
+    });
+  }
+}
+
 async function applyEvent(event: AttestationEvent): Promise<void> {
   if (event.type === "claimed") {
     await prisma.attestation.upsert({
-      where: { claimId: event.claimId },
+      where: { orderId: event.orderId },
       create: {
-        claimId: event.claimId,
+        orderId: event.orderId,
         vendor: event.vendor,
         recipient: event.recipient,
         itemType: event.itemType,
@@ -44,13 +79,14 @@ async function applyEvent(event: AttestationEvent): Promise<void> {
       // startLedger) is a no-op.
       update: {},
     });
+    await submitPendingConfirmationIfAny(event.orderId);
     return;
   }
 
   await prisma.attestation.upsert({
-    where: { claimId: event.claimId },
+    where: { orderId: event.orderId },
     create: {
-      claimId: event.claimId,
+      orderId: event.orderId,
       vendor: event.vendor,
       recipient: event.recipient,
       itemType: event.itemType,

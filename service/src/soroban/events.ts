@@ -5,7 +5,7 @@ import { withRetry } from "./retry.js";
 
 export type ClaimedEvent = {
   type: "claimed";
-  claimId: bigint;
+  orderId: string;
   vendor: string;
   recipient: string;
   itemType: string;
@@ -16,7 +16,7 @@ export type ClaimedEvent = {
 
 export type FinalizedEvent = {
   type: "finalized";
-  claimId: bigint;
+  orderId: string;
   vendor: string;
   recipient: string;
   itemType: string;
@@ -55,7 +55,7 @@ export async function fetchEventsSince(startLedger: number): Promise<{
   for (const raw of response.events) {
     const topic = raw.topic.map((t) => scValToNative(t));
     const kind = topic[0];
-    const claimId = BigInt(topic[1] as string | number | bigint);
+    const orderId = topic[1] as string;
     const fields = scValToNative(raw.value) as unknown[];
 
     if (kind === "claimed") {
@@ -67,7 +67,7 @@ export async function fetchEventsSince(startLedger: number): Promise<{
       ];
       events.push({
         type: "claimed",
-        claimId,
+        orderId,
         vendor,
         recipient,
         itemType,
@@ -86,7 +86,7 @@ export async function fetchEventsSince(startLedger: number): Promise<{
       ];
       events.push({
         type: "finalized",
-        claimId,
+        orderId,
         vendor,
         recipient,
         itemType,

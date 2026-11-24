@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Keypair, TransactionBuilder } from "@stellar/stellar-sdk";
 
 const SERVICE_URL = process.env.SERVICE_URL ?? "http://localhost:3900";
@@ -58,8 +59,16 @@ async function main() {
   console.log(`vendor:    ${vendor.publicKey()}`);
   console.log(`recipient: ${recipient.publicKey()}`);
 
+  // `orderId` is Eatovr's own order id in the real app — the contract
+  // (and this service) key everything off it now, not an on-chain-minted
+  // id, specifically so a recipient's confirm can be signed before the
+  // vendor ever claims (see `deferred-confirm.ts` for that path). A
+  // random id stands in for a real order here.
+  const orderId = `demo-order-${randomUUID()}`;
+  console.log(`order: ${orderId}`);
+
   console.log("\n1. Vendor claims a pickup...");
-  const claimPrepare = await postJson<{ xdr: string }>("/pickups/claim/prepare", {
+  const claimPrepare = await postJson<{ xdr: string }>(`/pickups/${orderId}/claim/prepare`, {
     vendorPublicKey: vendor.publicKey(),
     recipientPublicKey: recipient.publicKey(),
     itemType: "rice_and_stew_trays",
@@ -67,20 +76,14 @@ async function main() {
   });
 
   const claimSigned = signLocally(claimPrepare.xdr, vendor);
-  const claimResult = await postJson<{ hash: string; returnValue?: string }>(
-    "/transactions/submit",
-    { xdr: claimSigned },
-  );
-
-  const claimId = claimResult.returnValue;
-  if (!claimId) {
-    throw new Error("Did not get a claim id back from claim_pickup");
-  }
-  console.log(`   claimed. claim_id=${claimId}  tx=${claimResult.hash}`);
+  const claimResult = await postJson<{ hash: string }>("/transactions/submit", {
+    xdr: claimSigned,
+  });
+  console.log(`   claimed. tx=${claimResult.hash}`);
 
   console.log("\n2. Recipient independently confirms it...");
   const confirmPrepare = await postJson<{ xdr: string }>(
-    `/pickups/${claimId}/confirm/prepare`,
+    `/pickups/${orderId}/confirm/prepare`,
     { recipientPublicKey: recipient.publicKey() },
   );
 
@@ -93,7 +96,7 @@ async function main() {
   console.log("\n3. Waiting for the indexer to pick it up in the read model...");
   for (let attempt = 0; attempt < 10; attempt++) {
     await new Promise((resolve) => setTimeout(resolve, 2000));
-    const row = await getJson<{ status: string }>(`/pickups/${claimId}`).catch(() => null);
+    const row = await getJson<{ status: string }>(`/pickups/${orderId}`).catch(() => null);
     if (row?.status === "Finalized") {
       console.log("   read model shows Finalized:", row);
       return;

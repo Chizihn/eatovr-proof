@@ -172,7 +172,7 @@ export default async function Home() {
                     </TableHeader>
                     <TableBody>
                       {finalized.map((a) => (
-                        <TableRow key={a.claimId}>
+                        <TableRow key={a.orderId}>
                           <TableCell className="font-medium capitalize">
                             {a.itemType.replaceAll("_", " ")}
                           </TableCell>

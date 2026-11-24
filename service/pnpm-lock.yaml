@@ -14,6 +14,9 @@ importers:
       '@prisma/client':
         specifier: 7.10.1
         version: 7.10.1(prisma@7.10.1(@types/node@26.6.6)(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@7.0.2))(typescript@7.0.2)
+      '@reflector/contract-client':
+        specifier: 2.2.0
+        version: 2.2.0(@stellar/stellar-sdk@17.4.0(debug@4.4.3))
       '@stellar/stellar-sdk':
         specifier: 17.4.0
         version: 17.4.0(debug@4.4.3)
@@ -391,6 +394,11 @@ packages:
     peerDependenciesMeta:
       '@types/react':
         optional: true
+
+  '@reflector/contract-client@2.2.0':
+    resolution: {integrity: sha512-/wVM425eJyVsVB/2s+JrVfK+xdCXvMvDqe97JmcpHXXW5MX8JTEnP42LRfDM+uxH5YEArHo0rnJbcP2QZcDv5Q==}
+    peerDependencies:
+      '@stellar/stellar-sdk': '>=17'
 
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
@@ -1565,6 +1573,10 @@ snapshots:
       react: 19.3.1
     optionalDependencies:
       '@types/react': 19.3.0
+
+  '@reflector/contract-client@2.2.0(@stellar/stellar-sdk@17.4.0(debug@4.4.3))':
+    dependencies:
+      '@stellar/stellar-sdk': 17.4.0(debug@4.4.3)
 
   '@standard-schema/spec@1.1.0': {}
 

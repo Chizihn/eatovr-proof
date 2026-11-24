@@ -10,6 +10,7 @@ import { config } from "./config.js";
 setDefaultResultOrder("ipv4first");
 import { pickupRoutes } from "./routes/pickups.js";
 import { relayerRoutes } from "./routes/relayer.js";
+import { sponsorshipRoutes } from "./routes/sponsorships.js";
 import { startIndexer } from "./indexer/run.js";
 
 const app = Fastify({ logger: true });
@@ -18,6 +19,7 @@ app.get("/health", async () => ({ ok: true }));
 
 await app.register(pickupRoutes);
 await app.register(relayerRoutes);
+await app.register(sponsorshipRoutes);
 
 startIndexer(config.indexerPollIntervalMs);
 

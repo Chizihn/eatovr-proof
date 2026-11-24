@@ -43,3 +43,29 @@ independently confirms it with a completely different key, and the
 script polls the service's read model until it shows `"Finalized"` —
 proving the two-party on-chain flow end to end through the same API
 surface the real app will use.
+
+## Deferred confirm
+
+```sh
+npm run start:deferred-confirm
+```
+
+Proves the checkout-time pre-sign flow: the recipient signs
+`confirm_pickup` *before* the vendor has claimed anything, and the
+Attestation Service's indexer submits it automatically the moment the
+matching claim lands — no second recipient action, ever.
+
+## Sponsor Food
+
+```sh
+export DONOR_SECRET=$(stellar keys secret donor)
+npm run start:sponsor-food
+```
+
+Also needs a funded, USDC-trustlined donor identity, and the
+Attestation Service needs `TRUSTLESS_WORK_API_KEY` and `PLATFORM_SECRET`
+set (see `../service/.env.example`). Proves the full Sponsor Food loop:
+a donor funds a meal's Trustless Work escrow, a customer claims it
+through the demo "claim a sponsored meal" surface, the normal
+claim_pickup/confirm_pickup flow finalizes it, and the indexer releases
+the escrow automatically.

@@ -8,20 +8,33 @@ the public dashboard reads from.
 It never holds a vendor's or recipient's private key. The flow for
 each party's action is:
 
-1. `POST /pickups/claim/prepare` (or `/pickups/:claimId/confirm/prepare`)
-   — the service builds an unsigned transaction and returns its XDR.
+1. `POST /pickups/:orderId/claim/prepare` (or
+   `/pickups/:orderId/confirm/prepare`) — the service builds an
+   unsigned transaction and returns its XDR. `orderId` is Eatovr's own
+   order id, not an on-chain-minted id (see
+   [`../contracts/README.md`](../contracts/README.md)).
 2. The caller (the real app's passkey wallet, eventually — a demo
    script standing in for it today, see
    [`../demo-client`](../demo-client)) signs that XDR **locally** with
    the vendor's or recipient's own key.
 3. `POST /transactions/submit` with the signed XDR — the service
-   submits it and waits for it to land, returning the chain's result
-   (including the `claim_id` the contract assigned, for `claim_pickup`).
+   submits it and waits for it to land, returning the chain's result.
 
 Separately, a background loop polls Soroban RPC's `getEvents` for this
 contract and writes `claimed`/`finalized` events into the `attestations`
 table — this is the only thing that writes the read model; the relay
 routes never write to it directly.
+
+### Deferred confirm
+
+`POST /pickups/:orderId/pre-confirm` lets the recipient sign
+`confirm_pickup` once, at checkout — before the vendor has claimed
+anything — and stores the signed authorization unsubmitted
+(`PendingConfirmation` in `schema.prisma`). The indexer's own poll loop
+(`src/indexer/run.ts`'s `submitPendingConfirmationIfAny`) submits it
+automatically the moment the matching `claimed` event lands, via the
+relayer below. No second action from the recipient, ever. **Proven on
+testnet** via [`../demo-client/src/deferred-confirm.ts`](../demo-client/src/deferred-confirm.ts).
 
 ### Relayer (for passkey/smart-wallet callers)
 
@@ -46,13 +59,11 @@ use:
   transaction signed by an unrelated throwaway account.
 - `{ func, auth }` — a host function + pre-signed Soroban authorization
   entries, no funded account required from the caller; the sponsor
-  account builds and pays for the transaction around them. Implemented
-  per the documented protocol, but **not yet proven working** — a
-  hand-built test (approximating what `smart-account-kit` does
-  internally) hit `HostError: Error(Auth, InvalidAction)` during
-  simulation. Revisit once the mobile app is actually producing real
-  signed auth entries to test against, rather than a hand-rolled
-  approximation.
+  account builds and pays for the transaction around them. **Proven on
+  real testnet** both via the deferred-confirm flow above (the indexer
+  calls this exact path, `relayFuncAndAuth`, to auto-submit a
+  recipient's pre-signed confirmation) and on a real iOS device with
+  the actual mobile app's passkey wallet.
 
 ## Status
 
@@ -63,21 +74,77 @@ indexer picked up both events into the read model within seconds —
 
 ```json
 {
-  "claimId": "1",
+  "orderId": "demo-order-43bde772-3e70-4810-b0a3-9bf9b1785e37",
   "vendor": "GAG4O3QF2422KABPOMYSASWNOFJ6USMEAKL4LRHAZMAX7WTTFAX7EV2M",
   "recipient": "GAPMVJCGWW7J5ZCWYKRKGQ5KMTMYBNNGWZJDZP26RBOO4MEMS5X6R5NQ",
   "itemType": "rice_and_stew_trays",
   "quantity": 8,
   "status": "Finalized",
-  "claimedAt": "2026-11-20T12:32:20.000Z",
-  "confirmedAt": "2026-11-20T12:32:25.000Z",
-  "claimTxHash": "2530cb5bae87ed0f9cfecd174eb8b9546472be685f66a6859d11692eecbc1332",
-  "confirmTxHash": "795ca3d7485d17f809b055a8f96c297497b65b40f309d9c0a829cc3866aa91b1"
+  "claimedAt": "2026-11-23T15:44:47.000Z",
+  "confirmedAt": "2026-11-23T15:44:52.000Z",
+  "claimTxHash": "683842de10bb314bd0db811335813e652a19ece9e850b68da78ec44c91299367",
+  "confirmTxHash": "c17ca388f3e99d2f57b6947c4972a2aa0c18372a56106a05819ffa68c89ec6dd"
 }
 ```
 
+The deferred-confirm path above has also been run live end to end —
+see [`../demo-client/src/deferred-confirm.ts`](../demo-client/src/deferred-confirm.ts).
+
 These are seeded demo accounts, not a real vendor/recipient pair — see
 the honesty note in the root [`README.md`](../README.md).
+
+## Sponsor Food
+
+A second feature, additive to the attestation flow above: outside web
+donors fund real, on-chain-tracked meals via
+[Trustless Work](https://docs.trustlesswork.com/trustless-work) escrow
+(`src/sponsorship/trustless-work.ts`, their real **v1** REST API —
+`dev.api.trustlesswork.com`; their v2 beta API exists but a
+BackOffice-issued testnet key doesn't authenticate against it, see
+[`sponsor-food-build`](../.claude/skills/sponsor-food-build) for how
+that was confirmed), priced against a live
+[Reflector](https://reflector.network) oracle read
+(`src/reflector/client.ts`, **proven live against testnet**:
+`@reflector/contract-client`'s `PulseClient.lastPrice('USDC')`).
+
+Each sponsored meal ("unit") gets its **own** escrow, not one escrow
+per batch — Trustless Work's single-release escrow pays only its one
+fixed receiver once its milestone is completed and approved, and
+there's no refund/cancel-on-expiry endpoint, so one-per-batch couldn't
+fund meals redeemed across different vendors. See
+`prisma/schema.prisma`'s `SponsorshipBatch` doc comment for the full
+reasoning. The receiver/approver/serviceProvider/releaseSigner on
+every unit's escrow is Eatovr's own platform settlement address
+(`PLATFORM_SECRET`), not the donor and not the eventual vendor — the
+vendor isn't known until a customer claims the unit. Because the
+platform holds every administrative role, the indexer completes +
+approves + releases a unit's escrow unilaterally, automatically, when
+its order's `finalized` event lands (`src/indexer/run.ts`'s
+`releaseUnitIfSponsored`) — no second signer needed.
+
+Requires `TRUSTLESS_WORK_API_KEY` (request one at
+backoffice.trustlesswork.com — log in with a Stellar wallet, fill in a
+"Use Case", choose testnet) and a funded, USDC-trustlined
+`PLATFORM_SECRET` keypair; see `.env.example`. Without a key, every
+other route in this service still starts and works fine — only the
+Sponsor Food routes fail, with a clear error naming what's missing.
+
+**Proven end-to-end on testnet**, fully automatic after the donor's
+two signatures (deploy + fund):
+- Escrow deployed: `CAECWKDEEEPJUU3ROWZ4XLVGWVT2NHCJU7V465LFHBX4KIZIXPVLOBHC`
+- Donor funds the escrow →
+  [tx](https://stellar.expert/explorer/testnet/tx/38ad7df91b3602c008e680918b5b01522dd9c865279df7d11d998ed9ea61afe7)
+- A customer claims the sponsored meal, the normal unmodified
+  `claim_pickup`/`confirm_pickup` flow finalizes it, and the indexer
+  releases the escrow automatically →
+  [tx](https://stellar.expert/explorer/testnet/tx/f807755b77fd187cb8362bbc3f191cd9478e2c92b6eedcf77dfce2f20176114a)
+
+Reproducible via
+[`../demo-client/src/sponsor-food.ts`](../demo-client/src/sponsor-food.ts).
+Trustless Work's own `/helper/send-transaction` response doesn't
+reliably include a Stellar tx hash — the hashes above were computed
+directly from the signed transaction (`Transaction.hash()`), not taken
+from their response; see the skill above for why.
 
 ### A known RPC flakiness, in case it resurfaces
 
@@ -119,14 +186,22 @@ flow end to end.
 
 | Route | Method | Body | What |
 |---|---|---|---|
-| `/pickups/claim/prepare` | POST | `vendorPublicKey, recipientPublicKey, itemType, quantity` | Unsigned `claim_pickup` tx, source = vendor |
-| `/pickups/:claimId/confirm/prepare` | POST | `recipientPublicKey` | Unsigned `confirm_pickup` tx, source = recipient |
+| `/pickups/:orderId/claim/prepare` | POST | `vendorPublicKey, recipientPublicKey, itemType, quantity` | Unsigned `claim_pickup` tx, source = vendor |
+| `/pickups/:orderId/confirm/prepare` | POST | `recipientPublicKey` | Unsigned `confirm_pickup` tx, source = recipient |
+| `/pickups/:orderId/pre-confirm` | POST | `recipientPublicKey, func, auth` | Stores a recipient's signed confirm, submitted automatically once claimed |
 | `/transactions/submit` | POST | `xdr` (signed) | Submits and waits; returns `{ status, hash, returnValue }` |
 | `/pickups` | GET | — | Read model, newest first |
-| `/pickups/:claimId` | GET | — | One record from the read model |
+| `/pickups/:orderId` | GET | — | One record from the read model |
+| `/pickups/by-tx/:txHash` | GET | — | Resolves a record from either tx hash |
 | `/` | POST | `{ xdr }` or `{ func, auth }` | Relayer: fee-sponsored submit for passkey wallets |
 | `/` | GET | — | Relayer health check |
 | `/status` | GET | — | Relayer status (caller IP, network) |
+| `/sponsorships/tiers` | GET | — | Sponsor Food meal-count tiers |
+| `/sponsorships` | GET | — | All sponsorship batches + their units |
+| `/sponsorships` | POST | `donorPublicKey, tierId, region?` | Creates a batch, deploys each unit's escrow; returns unsigned deploy XDRs |
+| `/sponsorships/units/:unitId/submit-deploy` | POST | `signedXdr` | Submits escrow deploy; returns the unsigned fund XDR |
+| `/sponsorships/units/:unitId/submit-fund` | POST | `signedXdr` | Submits escrow funding; unit becomes `Available` |
+| `/sponsorships/claim` | POST | `region?` | Demo "claim a sponsored meal" — first-come-first-served |
 
 ## Stack
 

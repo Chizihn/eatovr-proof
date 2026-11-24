@@ -1,4 +1,5 @@
-import { CheckCircle2, ExternalLink, Hourglass, Soup } from "lucide-react";
+import Link from "next/link";
+import { CheckCircle2, ExternalLink, Heart, Hourglass, Soup, Ticket } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,6 +25,7 @@ import {
   truncateAddress,
   type Attestation,
 } from "@/lib/attestations";
+import { getSponsorshipBatches, type SponsorshipBatch } from "@/lib/sponsorships";
 import { cn } from "cn";
 
 function StatCard({
@@ -35,7 +37,7 @@ function StatCard({
   icon: typeof Soup;
   tone: "primary" | "success" | "warning";
   label: string;
-  value: number;
+  value: string | number;
 }) {
   return (
     <Card>
@@ -76,10 +78,14 @@ function TxButton({ hash, label }: { hash: string; label: string }) {
 
 export default async function Home() {
   let attestations: Attestation[] = [];
+  let sponsorships: SponsorshipBatch[] = [];
   let fetchError: string | null = null;
 
   try {
-    attestations = await getAttestations();
+    [attestations, sponsorships] = await Promise.all([
+      getAttestations(),
+      getSponsorshipBatches(),
+    ]);
   } catch (err) {
     fetchError = err instanceof Error ? err.message : "Unknown error";
   }
@@ -87,6 +93,19 @@ export default async function Home() {
   const finalized = attestations.filter((a) => a.status === "Finalized");
   const pending = attestations.filter((a) => a.status === "Pending");
   const mealsRescued = finalized.reduce((sum, a) => sum + a.quantity, 0);
+
+  const sponsoredOrderIds = new Set(
+    sponsorships
+      .flatMap((batch) => batch.units)
+      .map((u) => u.claimedOrderId)
+      .filter((id): id is string => id !== null),
+  );
+  const totalUsdcSponsored = sponsorships.reduce(
+    (sum, batch) => sum + batch.unitCount * Number(batch.unitValueUsdc),
+    0,
+  );
+  const unitsAvailable = sponsorships.reduce((sum, b) => sum + b.available, 0);
+  const unitsRedeemed = sponsorships.reduce((sum, b) => sum + b.redeemed, 0);
 
   return (
     <div className="flex min-h-svh flex-col">
@@ -100,7 +119,12 @@ export default async function Home() {
               Eatovr Proof
             </span>
           </div>
-          <ThemeToggle />
+          <div className="flex items-center gap-3">
+            <Button size="sm" variant="outline" render={<Link href="/sponsor" />}>
+              <Heart /> Sponsor Food
+            </Button>
+            <ThemeToggle />
+          </div>
         </div>
       </header>
 
@@ -144,6 +168,109 @@ export default async function Home() {
               />
             </div>
 
+            <div className="grid gap-4 sm:grid-cols-3">
+              <StatCard
+                icon={Heart}
+                tone="primary"
+                label="USDC sponsored"
+                value={`$${totalUsdcSponsored.toFixed(2)}`}
+              />
+              <StatCard
+                icon={Ticket}
+                tone="success"
+                label="Sponsored meals redeemed"
+                value={unitsRedeemed}
+              />
+              <StatCard
+                icon={Hourglass}
+                tone="warning"
+                label="Sponsored meals available"
+                value={unitsAvailable}
+              />
+            </div>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Sponsorships</CardTitle>
+                <CardDescription>
+                  Each batch is a donor funding N discrete meals via Trustless Work escrow —
+                  one escrow per unit, released automatically once that unit&apos;s pickup
+                  finalizes on-chain.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {sponsorships.length === 0 ? (
+                  <p className="py-12 text-center text-sm text-muted-foreground">
+                    No one has sponsored a meal yet.{" "}
+                    <Link href="/sponsor" className="text-primary underline-offset-4 hover:underline">
+                      Be the first
+                    </Link>
+                    .
+                  </p>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Donor</TableHead>
+                        <TableHead>Region</TableHead>
+                        <TableHead>Units</TableHead>
+                        <TableHead>Available</TableHead>
+                        <TableHead>Redeemed</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Created</TableHead>
+                        <TableHead className="text-right">On-chain</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {sponsorships.map((batch) => {
+                        const fundedUnit = batch.units.find((u) => u.fundingTxHash);
+                        const redeemedUnit = batch.units.find((u) => u.releaseTxHash);
+                        return (
+                        <TableRow key={batch.id}>
+                          <TableCell className="font-mono text-xs">
+                            {truncateAddress(batch.donor)}
+                          </TableCell>
+                          <TableCell className="text-muted-foreground">
+                            {batch.region ?? "Anywhere"}
+                          </TableCell>
+                          <TableCell className="tabular-nums">{batch.unitCount}</TableCell>
+                          <TableCell className="tabular-nums">{batch.available}</TableCell>
+                          <TableCell className="tabular-nums">{batch.redeemed}</TableCell>
+                          <TableCell>
+                            <Badge
+                              variant={
+                                batch.status === "Active"
+                                  ? "success"
+                                  : batch.status === "Depleted"
+                                    ? "outline"
+                                    : "warning"
+                              }
+                            >
+                              {batch.status}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-muted-foreground">
+                            {new Date(batch.createdAt).toLocaleDateString()}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center justify-end gap-1.5">
+                              {fundedUnit?.fundingTxHash ? (
+                                <TxButton hash={fundedUnit.fundingTxHash} label="funded" />
+                              ) : null}
+                              {redeemedUnit?.releaseTxHash ? (
+                                <TxButton hash={redeemedUnit.releaseTxHash} label="released" />
+                              ) : null}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                )}
+              </CardContent>
+            </Card>
+
             <Card className="flex-1">
               <CardHeader>
                 <CardTitle>Verified records</CardTitle>
@@ -174,7 +301,12 @@ export default async function Home() {
                       {finalized.map((a) => (
                         <TableRow key={a.orderId}>
                           <TableCell className="font-medium capitalize">
-                            {a.itemType.replaceAll("_", " ")}
+                            <div className="flex items-center gap-2">
+                              {a.itemType.replaceAll("_", " ")}
+                              {sponsoredOrderIds.has(a.orderId) ? (
+                                <Badge variant="success">Sponsored</Badge>
+                              ) : null}
+                            </div>
                           </TableCell>
                           <TableCell className="tabular-nums">{a.quantity}</TableCell>
                           <TableCell className="text-muted-foreground">

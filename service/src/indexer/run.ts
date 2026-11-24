@@ -3,6 +3,7 @@ import { sorobanServer } from "../soroban/client.js";
 import { fetchEventsSince, type AttestationEvent } from "../soroban/events.js";
 import { withRetry } from "../soroban/retry.js";
 import { relayFuncAndAuth } from "../soroban/relayer.js";
+import { releaseUnitIfSponsored } from "../sponsorship/service.js";
 
 const CURSOR_ID = 1;
 
@@ -111,6 +112,12 @@ async function applyEvent(event: AttestationEvent): Promise<void> {
       confirmTxHash: event.txHash,
     },
   });
+
+  // If this order funds a Sponsor Food unit, release its escrow now
+  // that both parties have independently confirmed the pickup — see
+  // sponsorship/service.ts's `releaseUnitIfSponsored` for why this is
+  // a no-op for every ordinary (non-sponsored) order.
+  await releaseUnitIfSponsored(event.orderId);
 }
 
 let running = false;

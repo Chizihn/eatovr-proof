@@ -70,3 +70,70 @@ model IndexerCursor {
 
   @@map("indexer_cursor")
 }
+
+// A donor's "sponsor N meals" purchase. Not a raw currency amount — a
+// fixed tier (see sponsorship/tiers.ts) that creates `unitCount`
+// discrete, identically-valued `SponsorshipUnit`s up front. Nothing
+// here ever splits a value at redemption time; the contract (and this
+// read model) only ever track whole units moving Pending -> Available
+// -> Claimed -> Redeemed. See docs/BUILDATHON-PLAN.md's Sponsor Food
+// section for why: no fractional-remainder problem, no on-chain math
+// over an arbitrary amount across however many people show up.
+//
+// Trustless Work has no cross-vendor split and a single-release
+// escrow pays only its one fixed receiver — so each unit gets its own
+// escrow (receiver: Eatovr's own platform settlement address, not the
+// donor and not the eventual vendor, which isn't known until a
+// customer claims the unit). Released automatically when that unit's
+// order finalizes on-chain (see indexer/run.ts). Paying the specific
+// fulfilling vendor onward from the platform address is a real,
+// separate follow-on transfer, not wired this week — same honesty
+// standard as the SEP-24 settlement note elsewhere in this repo.
+model SponsorshipBatch {
+  id              String    @id @default(uuid())
+  donorPublicKey  String    @map("donor_public_key")
+  region          String? // optional targeting; null = anywhere Eatovr operates
+  unitCount       Int       @map("unit_count")
+  unitValueUsdc   String    @map("unit_value_usdc") // decimal string, e.g. "2.0000000"
+  // The USD/USDC sanity-check read taken from Reflector's CEX/DEX feed
+  // at creation time (see reflector/client.ts) — a real oracle call,
+  // not decoration. NGN -> USD is a separately-documented fixed demo
+  // rate (see sponsorship/tiers.ts) because Reflector's Fiat FX feed
+  // has no NGN pair at all, verified live against testnet.
+  reflectorUsdPrice String? @map("reflector_usd_price")
+  status          String    @default("Funding") @map("status") // "Funding" | "Active" | "Depleted"
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  units SponsorshipUnit[]
+
+  @@map("sponsorship_batches")
+}
+
+// One redeemable meal within a batch. `escrowContractId` is this
+// unit's own Trustless Work single-release escrow (one per unit, see
+// `SponsorshipBatch`'s doc comment for why) — deployed and funded by
+// the donor's wallet at sponsor time, released to the platform
+// settlement address when `claimedOrderId`'s order finalizes.
+model SponsorshipUnit {
+  id               String    @id @default(uuid())
+  batchId          String    @map("batch_id")
+  batch            SponsorshipBatch @relation(fields: [batchId], references: [id])
+  index            Int
+  status           String    @default("Pending") // "Pending" | "Available" | "Claimed" | "Redeemed"
+  escrowContractId String?   @map("escrow_contract_id")
+  fundingTxHash    String?   @map("funding_tx_hash")
+  // Set once a customer claims this unit in the demo "claim a
+  // sponsored meal" surface — the orderId then goes through the exact
+  // same unmodified claim_pickup/confirm_pickup flow as any order.
+  claimedOrderId   String?   @unique @map("claimed_order_id")
+  claimedAt        DateTime? @map("claimed_at")
+  releaseTxHash    String?   @map("release_tx_hash")
+  releasedAt       DateTime? @map("released_at")
+  releaseError     String?   @map("release_error")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  @@unique([batchId, index])
+  @@map("sponsorship_units")
+}

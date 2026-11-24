@@ -5,14 +5,22 @@ food-surplus-recovery marketplace in Nigeria. A pickup record finalizes
 only once **both** parties have independently authorized a call
 against it:
 
-1. `claim_pickup(vendor, recipient, item_type, quantity)` — the vendor
-   claims a pickup happened. Requires `vendor`'s own authorization.
-   Returns a `claim_id`. Status: `Pending`.
-2. `confirm_pickup(claim_id, recipient)` — the recipient named on that
+1. `claim_pickup(order_id, vendor, recipient, item_type, quantity)` —
+   the vendor claims a pickup happened. Requires `vendor`'s own
+   authorization. Status: `Pending`.
+2. `confirm_pickup(order_id, recipient)` — the recipient named on that
    specific claim independently confirms it. Requires `recipient`'s own
    authorization, and the caller must be the exact address stored on the
    claim. Status moves to `Finalized`, and the contract emits a
    `finalized` event.
+
+`order_id` is Eatovr's own order id (a string the caller supplies), not
+an on-chain-minted sequential id — see `DataKey::Claim`'s doc comment
+in `src/lib.rs` for why: it exists at checkout, before `claim_pickup`
+ever runs, so the recipient's `confirm_pickup` authorization can be
+signed then and submitted later, once the matching claim lands (the
+Attestation Service's indexer does this automatically — see
+`../service/README.md`).
 
 Neither call alone can produce a `Finalized` record — that enforcement
 lives in the contract's own auth checks, not in a backend flag.
@@ -20,21 +28,25 @@ lives in the contract's own auth checks, not in a backend flag.
 ## Status
 
 Proven end-to-end on testnet with seeded accounts, through the real
-contract calls the app will eventually make — ready to activate for
-the first live vendor, not yet wired into the Eatovr app itself.
+contract calls the app will eventually make, including real-device
+mobile passkey testing — ready to activate for the first live vendor.
 
-- Unit tests: `cargo test -p attestation-registry` — 6/6 green
-  (happy-path finalize plus every failure case).
+- Unit tests: `cargo test -p attestation-registry` — 8/8 green
+  (happy-path finalize, the deferred-confirm-before-claim path, and
+  every failure case).
 - Deployed to testnet: contract id
-  [`CDTKXIYY745COZNVOJIPBTVDBYJMDE3V253IMXVILWOI3NDTK7FK2ITS`](https://lab.stellar.org/r/testnet/contract/CDTKXIYY745COZNVOJIPBTVDBYJMDE3V253IMXVILWOI3NDTK7FK2ITS).
+  [`CDII3ONLMNCEYTVO77V2X5WAZRAPBIJRYFGCETQ42X62CDXJGDKGUH2R`](https://lab.stellar.org/r/testnet/contract/CDII3ONLMNCEYTVO77V2X5WAZRAPBIJRYFGCETQ42X62CDXJGDKGUH2R)
+  (redeployed from an earlier auto-incrementing-id version — the rekey
+  to `order_id` is what makes deferred-confirm possible).
 - Live two-party flow verified with two independent seeded testnet
   identities (`vendor` and `recipient`, two different keypairs):
   - `claim_pickup` by `vendor` →
-    [tx](https://stellar.expert/explorer/testnet/tx/62046d999bb97c4a40cc9604aeaf3818bff11669a4524ef2e219f230e235a739)
-    — `claimed` event, claim id `0`.
+    [tx](https://stellar.expert/explorer/testnet/tx/683842de10bb314bd0db811335813e652a19ece9e850b68da78ec44c91299367)
+    — `claimed` event.
   - `confirm_pickup` by `recipient` (a different signing key than the
-    vendor's) →
-    [tx](https://stellar.expert/explorer/testnet/tx/63aafb3c5c1fb4e645944408f5bbbbea82345235b47d444d10fa50510d2c549d)
+    vendor's, signed *before* the claim above ever ran, auto-submitted
+    by the indexer once it landed) →
+    [tx](https://stellar.expert/explorer/testnet/tx/c17ca388f3e99d2f57b6947c4972a2aa0c18372a56106a05819ffa68c89ec6dd)
     — `finalized` event.
   - `get_claim` confirms `status: "Finalized"` with both parties'
     addresses and both timestamps recorded on-chain.

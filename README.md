@@ -50,18 +50,42 @@ Eatovr mobile app (existing, live)
 Vendors and NGO staff confirm with a passkey-based smart wallet
 embedded in the app itself — biometric prompt, no seed phrase, no
 separate wallet app. Small food stalls and NGO logistics staff are not
-crypto-native users, and that's the realistic path to adoption. This is
-a verification/attestation primitive only — it doesn't touch payments
-or stablecoins, by design.
+crypto-native users, and that's the realistic path to adoption.
+Eatovr's own core marketplace stays non-fintech — Paystack is the only
+way an ordinary customer pays, no exceptions.
+
+## Sponsor Food — a second, additive Stellar primitive
+
+On top of the verification layer, outside web donors can fund real,
+on-chain-tracked meals through **Sponsor Food** — new money entering
+from donors who are already choosing to engage with a wallet, not a
+change to how Eatovr's own customers pay. A donor picks a meal-count
+tier; each sponsored meal gets its own
+[Trustless Work](https://docs.trustlesswork.com/trustless-work) escrow,
+funded by the donor's connected wallet via
+[Stellar Wallets Kit](https://github.com/Creit-Tech/Stellar-Wallets-Kit)
+and released automatically the moment that meal's pickup independently
+finalizes on-chain — the same two-party attestation above triggers the
+payout. Pricing is checked against a live
+[Reflector](https://reflector.network) oracle read, not a hardcoded
+number. **Proven end-to-end on testnet** — see
+[`service/README.md`](service/README.md#sponsor-food) for the real
+escrow and transaction links. Full design in
+[`docs/BUILDATHON-PLAN.md`](docs/BUILDATHON-PLAN.md).
+
+`AttestationRegistry` is also registered in the
+[Stellar Registry](https://github.com/theahaco/scaffold-stellar) under
+`unverified/eatovr-attestation-registry` for discoverability —
+[registration tx](https://stellar.expert/explorer/testnet/tx/ba99a5b87f837e4abedd7fad1dcc74ce7379c47e18c42d980ca9fa5b921254ac).
 
 ## What's in this repo
 
 | Path | What | Status |
 |---|---|---|
-| `contracts/attestation-registry/` | The `AttestationRegistry` Soroban contract | **Built, tested, deployed to testnet** — see below |
-| `service/` | Standalone Attestation Service — relays app confirm actions into contract calls, indexes finalized events into Postgres | **Built, proven end-to-end on testnet** — see below |
-| `dashboard/` | Public Next.js site showing aggregate verified numbers, each linking to its on-chain transaction | Not started |
-| `demo-client/` | Mock client that calls the service exactly the way the real Eatovr app will, so anyone can run and verify the whole loop independently | **Built, proven end-to-end on testnet** — see below |
+| `contracts/attestation-registry/` | The `AttestationRegistry` Soroban contract, order-id-keyed (deferred-confirm) | **Built, tested, deployed to testnet** — see below |
+| `service/` | Standalone Attestation Service — relays app confirm actions into contract calls, indexes finalized events into Postgres, and (Sponsor Food) deploys/releases per-meal Trustless Work escrows | **Built, proven end-to-end on testnet** — see below |
+| `dashboard/` | Public Next.js site showing aggregate verified numbers and sponsorships, each linking to its on-chain transaction | **Built** — impact overview, sponsorships table, attestations table, Sponsor Food donor page |
+| `demo-client/` | Mock client that calls the service exactly the way the real Eatovr app will, so anyone can run and verify the whole loop independently — including Sponsor Food's full donor→escrow→pickup→release loop | **Built, proven end-to-end on testnet** — see below |
 
 ## Proof it works
 
@@ -70,12 +94,16 @@ two-party flow has been run live, with two independent seeded testnet
 identities standing in for a vendor and a recipient:
 
 - Contract:
-  [`CDTKXIYY745COZNVOJIPBTVDBYJMDE3V253IMXVILWOI3NDTK7FK2ITS`](https://lab.stellar.org/r/testnet/contract/CDTKXIYY745COZNVOJIPBTVDBYJMDE3V253IMXVILWOI3NDTK7FK2ITS)
+  [`CDII3ONLMNCEYTVO77V2X5WAZRAPBIJRYFGCETQ42X62CDXJGDKGUH2R`](https://lab.stellar.org/r/testnet/contract/CDII3ONLMNCEYTVO77V2X5WAZRAPBIJRYFGCETQ42X62CDXJGDKGUH2R)
+  (redeployed, order-id-keyed — see `src/lib.rs`'s `DataKey::Claim` doc
+  comment for why)
 - Vendor claims a pickup →
-  [transaction](https://stellar.expert/explorer/testnet/tx/62046d999bb97c4a40cc9604aeaf3818bff11669a4524ef2e219f230e235a739)
+  [transaction](https://stellar.expert/explorer/testnet/tx/683842de10bb314bd0db811335813e652a19ece9e850b68da78ec44c91299367)
   (`claimed` event)
-- A **different** keypair, the recipient, independently confirms it →
-  [transaction](https://stellar.expert/explorer/testnet/tx/63aafb3c5c1fb4e645944408f5bbbbea82345235b47d444d10fa50510d2c549d)
+- A **different** keypair, the recipient, independently confirms it —
+  signed at (simulated) checkout, before the claim above ever ran, and
+  auto-submitted by the indexer the moment it landed →
+  [transaction](https://stellar.expert/explorer/testnet/tx/c17ca388f3e99d2f57b6947c4972a2aa0c18372a56106a05819ffa68c89ec6dd)
   (`finalized` event)
 - The record now reads `status: "Finalized"` on-chain, with both
   parties' addresses and both timestamps recorded.
@@ -98,7 +126,13 @@ transaction links.
 main backend API isn't live. The above is seeded demo accounts on
 testnet, not a running pilot with real numbers. This is the
 verification layer proven end-to-end, ready to activate for the first
-live vendor.
+live vendor. Sponsor Food carries the same standard: testnet USDC, demo
+"claim a sponsored meal" redemption rules (the real product gates this
+through verified NGOs/beneficiaries, not an open claim button), and
+escrow release moves USDC to Eatovr's own platform settlement
+address — paying it onward to the specific vendor, and eventually
+converting to naira via a real SEP-24 anchor, is a real production
+step not built this week.
 
 ## Why this repo is separate from Eatovr's main app
 

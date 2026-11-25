@@ -189,8 +189,9 @@ flow end to end.
 | `/pickups/:orderId/claim/prepare` | POST | `vendorPublicKey, recipientPublicKey, itemType, quantity` | Unsigned `claim_pickup` tx, source = vendor |
 | `/pickups/:orderId/confirm/prepare` | POST | `recipientPublicKey` | Unsigned `confirm_pickup` tx, source = recipient |
 | `/pickups/:orderId/pre-confirm` | POST | `recipientPublicKey, func, auth` | Stores a recipient's signed confirm, submitted automatically once claimed |
+| `/pickups/:orderId/metadata` | POST | `region?, category?` | Attaches dashboard-filter metadata before claim — not part of any on-chain auth check |
 | `/transactions/submit` | POST | `xdr` (signed) | Submits and waits; returns `{ status, hash, returnValue }` |
-| `/pickups` | GET | — | Read model, newest first |
+| `/pickups` | GET | query: `region?, category?` | Read model, newest first, optionally filtered |
 | `/pickups/:orderId` | GET | — | One record from the read model |
 | `/pickups/by-tx/:txHash` | GET | — | Resolves a record from either tx hash |
 | `/` | POST | `{ xdr }` or `{ func, auth }` | Relayer: fee-sponsored submit for passkey wallets |
@@ -209,4 +210,19 @@ Fastify, Prisma 7 (with the `@prisma/adapter-pg` driver adapter — see
 the Prisma 7 config notes in this repo's
 [`attestation-service-build`](../.claude/skills/attestation-service-build)
 skill if touching `prisma.config.ts`/`schema.prisma`), Postgres,
-`@stellar/stellar-sdk`.
+`@stellar/stellar-sdk`, `@fastify/cors` (`origin: true` — nothing here
+is cookie/session-authenticated, so any origin is fine; needed because
+the dashboard's `/sponsor` page calls this service directly from the
+browser, and they're on different domains once both are deployed —
+see `../docs/DEPLOYMENT.md`).
+
+## Deploying publicly
+
+See [`../docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md) — including
+Vercel: indexing is request-driven (`triggerIndexOnce` in
+`src/indexer/run.ts`, called synchronously right after every
+transaction submission), not timer-driven, specifically so it doesn't
+depend on a platform keeping one process running continuously.
+`startIndexer`'s interval loop still runs too, as a belt-and-suspenders
+safety net on a host where it *can* stay up (Railway, Render, local
+dev) — just no longer required for correctness.

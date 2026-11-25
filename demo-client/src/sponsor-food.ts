@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Keypair, TransactionBuilder } from "@stellar/stellar-sdk";
+import { SponsorshipUnitStatus } from "./constants.js";
 
 const SERVICE_URL = process.env.SERVICE_URL ?? "http://localhost:3900";
 const NETWORK_PASSPHRASE =
@@ -94,12 +95,18 @@ async function main() {
   }
 
   console.log("\n3. A customer claims the sponsored meal (demo claim surface)...");
-  const claimed = await postJson<{ orderId: string }>("/sponsorships/claim", {});
-  console.log(`   claimed as order ${claimed.orderId}`);
+  const claimed = await postJson<{ batchId: string; unitId: string }>("/sponsorships/claim", {});
+  console.log(`   reserved unit ${claimed.unitId} — no order yet, credit isn't tied to a vendor until redeemed`);
+
+  console.log("\n3b. The customer redeems it at checkout against a real listing — standing in for");
+  console.log("    the real Eatovr backend's own order-creation flow, which is what actually mints this:");
+  const orderId = `sponsored-${randomUUID()}`;
+  await postJson("/sponsorships/units/" + claimed.unitId + "/attach-order", { orderId });
+  console.log(`   attached as order ${orderId}`);
 
   console.log("\n4. Normal pickup flow — vendor claims, recipient confirms...");
   const claimPrepare = await postJson<{ xdr: string }>(
-    `/pickups/${claimed.orderId}/claim/prepare`,
+    `/pickups/${orderId}/claim/prepare`,
     {
       vendorPublicKey: vendor.publicKey(),
       recipientPublicKey: recipient.publicKey(),
@@ -110,7 +117,7 @@ async function main() {
   await postJson("/transactions/submit", { xdr: signLocally(claimPrepare.xdr, vendor) });
 
   const confirmPrepare = await postJson<{ xdr: string }>(
-    `/pickups/${claimed.orderId}/confirm/prepare`,
+    `/pickups/${orderId}/confirm/prepare`,
     { recipientPublicKey: recipient.publicKey() },
   );
   await postJson("/transactions/submit", { xdr: signLocally(confirmPrepare.xdr, recipient) });
@@ -120,10 +127,10 @@ async function main() {
   for (let attempt = 0; attempt < 15; attempt++) {
     await new Promise((resolve) => setTimeout(resolve, 2000));
     const batch = await getJson<{
-      units: { id: string; status: string; releaseTxHash: string | null }[];
+      units: { id: string; status: SponsorshipUnitStatus; releaseTxHash: string | null }[];
     }>(`/sponsorships/${created.batchId}`).catch(() => null);
     const unit = batch?.units.find((u) => u.id === created.units[0]?.unitId);
-    if (unit?.status === "Redeemed") {
+    if (unit?.status === SponsorshipUnitStatus.Redeemed) {
       console.log(`   released automatically — no donor or platform action after step 2-3. release tx=${unit.releaseTxHash}`);
       return;
     }

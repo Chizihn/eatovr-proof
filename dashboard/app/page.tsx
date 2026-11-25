@@ -19,14 +19,68 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { NetworkBadge } from "@/components/shared/network-badge";
+import { ContractStrip } from "@/components/shared/contract-strip";
 import {
+  AttestationStatus,
+  ATTESTATION_CONTRACT_ID,
   getAttestations,
+  OrderCategory,
   stellarExpertTxUrl,
   truncateAddress,
   type Attestation,
 } from "@/lib/attestations";
-import { getSponsorshipBatches, type SponsorshipBatch } from "@/lib/sponsorships";
+import {
+  getSponsorshipBatches,
+  SponsorshipBatchStatus,
+  type SponsorshipBatch,
+} from "@/lib/sponsorships";
+import { TimeSeriesChart } from "@/components/shared/time-series-chart";
 import { cn } from "cn";
+
+/** Daily buckets for the last `days` days, oldest first, zero-filled for days with no data. */
+function dailyBuckets(
+  dates: string[],
+  days: number,
+): { date: string; value: number }[] {
+  const counts = new Map<string, number>();
+  for (const iso of dates) {
+    const key = iso.slice(0, 10);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+
+  const buckets: { date: string; value: number }[] = [];
+  const today = new Date();
+  for (let i = days - 1; i >= 0; i -= 1) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const key = d.toISOString().slice(0, 10);
+    buckets.push({ date: key, value: counts.get(key) ?? 0 });
+  }
+  return buckets;
+}
+
+/** Same as `dailyBuckets`, but sums a weight (e.g. quantity) per date instead of counting rows. */
+function dailyBucketsWeighted(
+  entries: { date: string; weight: number }[],
+  days: number,
+): { date: string; value: number }[] {
+  const weighted = new Map<string, number>();
+  for (const { date, weight } of entries) {
+    const key = date.slice(0, 10);
+    weighted.set(key, (weighted.get(key) ?? 0) + weight);
+  }
+
+  const buckets: { date: string; value: number }[] = [];
+  const today = new Date();
+  for (let i = days - 1; i >= 0; i -= 1) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const key = d.toISOString().slice(0, 10);
+    buckets.push({ date: key, value: weighted.get(key) ?? 0 });
+  }
+  return buckets;
+}
 
 function StatCard({
   icon: Icon,
@@ -76,7 +130,13 @@ function TxButton({ hash, label }: { hash: string; label: string }) {
   );
 }
 
-export default async function Home() {
+export default async function Home({
+  searchParams,
+}: {
+  searchParams: Promise<{ region?: string; category?: string }>;
+}) {
+  const { region: regionFilter, category: categoryFilter } = await searchParams;
+
   let attestations: Attestation[] = [];
   let sponsorships: SponsorshipBatch[] = [];
   let fetchError: string | null = null;
@@ -90,8 +150,18 @@ export default async function Home() {
     fetchError = err instanceof Error ? err.message : "Unknown error";
   }
 
-  const finalized = attestations.filter((a) => a.status === "Finalized");
-  const pending = attestations.filter((a) => a.status === "Pending");
+  // Filtering happens here, not via a second request to the service —
+  // the full unfiltered list is what the available filter options
+  // below are derived from too.
+  const filteredAttestations = attestations.filter(
+    (a) =>
+      (!regionFilter || a.region === regionFilter) &&
+      (!categoryFilter || a.category === categoryFilter),
+  );
+  const regions = [...new Set(attestations.map((a) => a.region).filter((r): r is string => !!r))].sort();
+
+  const finalized = filteredAttestations.filter((a) => a.status === AttestationStatus.Finalized);
+  const pending = filteredAttestations.filter((a) => a.status === AttestationStatus.Pending);
   const mealsRescued = finalized.reduce((sum, a) => sum + a.quantity, 0);
 
   const sponsoredOrderIds = new Set(
@@ -107,6 +177,12 @@ export default async function Home() {
   const unitsAvailable = sponsorships.reduce((sum, b) => sum + b.available, 0);
   const unitsRedeemed = sponsorships.reduce((sum, b) => sum + b.redeemed, 0);
 
+  const mealsRescuedDaily = dailyBucketsWeighted(
+    finalized.filter((a) => a.confirmedAt).map((a) => ({ date: a.confirmedAt as string, weight: a.quantity })),
+    14,
+  );
+  const sponsorshipsDaily = dailyBuckets(sponsorships.map((b) => b.createdAt), 14);
+
   return (
     <div className="flex min-h-svh flex-col">
       <header className="sticky top-0 z-10 border-b bg-card/80 backdrop-blur-sm">
@@ -118,6 +194,7 @@ export default async function Home() {
             <span className="font-heading text-lg font-semibold tracking-tight">
               Eatovr Proof
             </span>
+            <NetworkBadge />
           </div>
           <div className="flex items-center gap-3">
             <Button size="sm" variant="outline" render={<Link href="/sponsor" />}>
@@ -127,6 +204,7 @@ export default async function Home() {
           </div>
         </div>
       </header>
+      <ContractStrip contractId={ATTESTATION_CONTRACT_ID} />
 
       <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-8 px-6 py-8 sm:px-10">
         <div>
@@ -189,6 +267,27 @@ export default async function Home() {
               />
             </div>
 
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Meals rescued, last 14 days</CardTitle>
+                  <CardDescription>By confirmation date.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <TimeSeriesChart data={mealsRescuedDaily} color="var(--primary)" unit="meals" />
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader>
+                  <CardTitle>Sponsorships, last 14 days</CardTitle>
+                  <CardDescription>By batch creation date.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <TimeSeriesChart data={sponsorshipsDaily} color="var(--chart-4)" unit="batches" />
+                </CardContent>
+              </Card>
+            </div>
+
             <Card>
               <CardHeader>
                 <CardTitle>Sponsorships</CardTitle>
@@ -239,9 +338,9 @@ export default async function Home() {
                           <TableCell>
                             <Badge
                               variant={
-                                batch.status === "Active"
+                                batch.status === SponsorshipBatchStatus.Active
                                   ? "success"
-                                  : batch.status === "Depleted"
+                                  : batch.status === SponsorshipBatchStatus.Depleted
                                     ? "outline"
                                     : "warning"
                               }
@@ -278,6 +377,49 @@ export default async function Home() {
                   Newest first. Both links go to the actual on-chain
                   transaction — anyone can check these independently.
                 </CardDescription>
+                <form className="mt-2 flex flex-wrap items-end gap-3" action="/">
+                  <div className="grid gap-1">
+                    <label htmlFor="region" className="text-xs text-muted-foreground">
+                      Region
+                    </label>
+                    <select
+                      id="region"
+                      name="region"
+                      defaultValue={regionFilter ?? ""}
+                      className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                    >
+                      <option value="">All regions</option>
+                      {regions.map((r) => (
+                        <option key={r} value={r}>
+                          {r}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="grid gap-1">
+                    <label htmlFor="category" className="text-xs text-muted-foreground">
+                      Category
+                    </label>
+                    <select
+                      id="category"
+                      name="category"
+                      defaultValue={categoryFilter ?? ""}
+                      className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                    >
+                      <option value="">All categories</option>
+                      <option value={OrderCategory.commercial}>Commercial</option>
+                      <option value={OrderCategory.donation_recovery}>Donation recovery</option>
+                    </select>
+                  </div>
+                  <Button type="submit" size="sm" variant="outline">
+                    Apply
+                  </Button>
+                  {regionFilter || categoryFilter ? (
+                    <Button size="sm" variant="ghost" render={<Link href="/" />}>
+                      Clear
+                    </Button>
+                  ) : null}
+                </form>
               </CardHeader>
               <CardContent>
                 {finalized.length === 0 ? (
@@ -291,6 +433,8 @@ export default async function Home() {
                       <TableRow>
                         <TableHead>Item</TableHead>
                         <TableHead>Qty</TableHead>
+                        <TableHead>Region</TableHead>
+                        <TableHead>Category</TableHead>
                         <TableHead>Confirmed</TableHead>
                         <TableHead>Vendor</TableHead>
                         <TableHead>Recipient</TableHead>
@@ -309,6 +453,16 @@ export default async function Home() {
                             </div>
                           </TableCell>
                           <TableCell className="tabular-nums">{a.quantity}</TableCell>
+                          <TableCell className="text-muted-foreground">
+                            {a.region ?? "—"}
+                          </TableCell>
+                          <TableCell>
+                            {a.category === OrderCategory.donation_recovery ? (
+                              <Badge variant="outline">Donation recovery</Badge>
+                            ) : (
+                              <span className="text-muted-foreground">Commercial</span>
+                            )}
+                          </TableCell>
                           <TableCell className="text-muted-foreground">
                             {a.confirmedAt
                               ? new Date(a.confirmedAt).toLocaleString()
@@ -341,7 +495,6 @@ export default async function Home() {
 
       <footer className="border-t">
         <div className="mx-auto flex max-w-7xl items-center gap-2 px-6 py-6 text-xs text-muted-foreground sm:px-10">
-          <Badge variant="outline">Testnet</Badge>
           <p>
             Seeded demo accounts, not a live pilot — this is the
             verification layer proven end-to-end, ready to activate for

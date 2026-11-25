@@ -1,16 +1,16 @@
 import type { Metadata } from "next";
-import { Geist_Mono, Poppins } from "next/font/google";
+import { Geist_Mono, Lato } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
 
-// Poppins for everything readable — a warmer, friendlier geometric
-// sans fits a food-rescue/social-impact dashboard better than a
-// default system/engineering typeface. Geist Mono stays for tx
-// hashes and addresses, where a true monospace matters.
-const poppins = Poppins({
-  variable: "--font-poppins",
+// Lato for everything readable — Poppins' geometric letterforms read
+// oversized at body-text sizes; Lato keeps a similar warmth without
+// that bulk. Geist Mono stays for tx hashes and addresses, where a
+// true monospace matters.
+const lato = Lato({
+  variable: "--font-lato",
   subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
+  weight: ["400", "700"],
 });
 
 const geistMono = Geist_Mono({
@@ -35,7 +35,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${poppins.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${lato.variable} ${geistMono.variable} h-full antialiased`}
       suppressHydrationWarning
     >
       <body className="min-h-full flex flex-col">

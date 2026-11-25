@@ -1,9 +1,10 @@
 import { prisma } from "../db/prisma.js";
+import { AttestationStatus, type OrderCategory } from "../generated/prisma/client.js";
 import { sorobanServer } from "../soroban/client.js";
 import { fetchEventsSince, type AttestationEvent } from "../soroban/events.js";
 import { withRetry } from "../soroban/retry.js";
 import { relayFuncAndAuth } from "../soroban/relayer.js";
-import { releaseUnitIfSponsored } from "../sponsorship/service.js";
+import { releaseUnitIfSponsored, retryPendingBackendNotifications } from "../sponsorship/service.js";
 
 const CURSOR_ID = 1;
 
@@ -61,8 +62,24 @@ async function submitPendingConfirmationIfAny(orderId: string): Promise<void> {
   }
 }
 
+/**
+ * Region/category for an order, stashed in `OrderMetadata` before
+ * `claim_pickup` ever ran (see schema.prisma's doc comment) — the
+ * `claimed` event itself carries neither field, so this is the only
+ * place either one can come from. Missing metadata (the common case
+ * for a demo order that never set any) just means an attestation row
+ * with `region: null`, `category` falling back to its schema default.
+ */
+async function lookupOrderMetadata(
+  orderId: string,
+): Promise<{ region: string | null; category: OrderCategory | undefined }> {
+  const metadata = await prisma.orderMetadata.findUnique({ where: { orderId } });
+  return { region: metadata?.region ?? null, category: metadata?.category ?? undefined };
+}
+
 async function applyEvent(event: AttestationEvent): Promise<void> {
   if (event.type === "claimed") {
+    const { region, category } = await lookupOrderMetadata(event.orderId);
     await prisma.attestation.upsert({
       where: { orderId: event.orderId },
       create: {
@@ -71,7 +88,9 @@ async function applyEvent(event: AttestationEvent): Promise<void> {
         recipient: event.recipient,
         itemType: event.itemType,
         quantity: event.quantity,
-        status: "Pending",
+        status: AttestationStatus.Pending,
+        region,
+        ...(category ? { category } : {}),
         claimedAt: new Date(event.ledgerClosedAt),
         claimTxHash: event.txHash,
       },
@@ -84,15 +103,18 @@ async function applyEvent(event: AttestationEvent): Promise<void> {
     return;
   }
 
+  const { region, category } = await lookupOrderMetadata(event.orderId);
   await prisma.attestation.upsert({
     where: { orderId: event.orderId },
     create: {
       orderId: event.orderId,
       vendor: event.vendor,
       recipient: event.recipient,
+      region,
+      ...(category ? { category } : {}),
       itemType: event.itemType,
       quantity: event.quantity,
-      status: "Finalized",
+      status: AttestationStatus.Finalized,
       claimedAt: new Date(Number(event.claimedAt) * 1000),
       confirmedAt: new Date(Number(event.confirmedAt) * 1000),
       confirmTxHash: event.txHash,
@@ -103,7 +125,7 @@ async function applyEvent(event: AttestationEvent): Promise<void> {
       claimTxHash: "unknown",
     },
     update: {
-      status: "Finalized",
+      status: AttestationStatus.Finalized,
       // `finalized`'s claimed_at is the authoritative on-chain value;
       // reconcile it in case the earlier `claimed` event only had the
       // ledger-close-time approximation.
@@ -122,7 +144,8 @@ async function applyEvent(event: AttestationEvent): Promise<void> {
 
 let running = false;
 
-export async function pollOnce(): Promise<void> {
+/** Returns how many events this pass actually applied, so callers can tell an empty poll from a real one. */
+export async function pollOnce(): Promise<number> {
   const startLedger = await getStartLedger();
   const { events, latestLedger } = await fetchEventsSince(startLedger);
 
@@ -133,21 +156,69 @@ export async function pollOnce(): Promise<void> {
   if (latestLedger >= startLedger) {
     await saveCursor(latestLedger);
   }
+
+  // Retries any Redeemed unit whose release webhook to the real Eatovr
+  // backend hasn't been acknowledged yet — see
+  // sponsorship/service.ts's `notifyBackendOfRelease`. Runs every poll,
+  // not just when there are new events, so a backend outage resolves
+  // itself as soon as it comes back up rather than waiting on the next
+  // on-chain event.
+  await retryPendingBackendNotifications();
+
+  return events.length;
 }
 
-export function startIndexer(intervalMs: number): NodeJS.Timeout {
-  const tick = async () => {
-    if (running) return;
-    running = true;
-    try {
-      await pollOnce();
-    } catch (err) {
-      console.error("[indexer] poll failed:", err);
-    } finally {
-      running = false;
+/**
+ * Runs one poll synchronously and swallows errors — call this from a
+ * request handler right after submitting a transaction, so indexing
+ * (and everything chained off it: the deferred-confirm auto-submit,
+ * the sponsorship auto-release) doesn't depend on a background timer
+ * ever ticking again before the caller needs to see the result.
+ *
+ * This is what actually makes the serverless deploy target work (see
+ * docs/DEPLOYMENT.md's Vercel section): a platform that only runs
+ * code while handling a request has no reliable way to keep
+ * `startIndexer`'s `setInterval` alive between requests, so every
+ * submission site in `routes/pickups.ts` and `routes/relayer.ts`
+ * calls this directly instead of waiting for the next tick. Safe to
+ * call even where the interval *is* reliable (Railway/Render/local)
+ * — it shares the same `running` guard, so the two never race.
+ *
+ * Retries a couple of times on an empty first pass — confirmed live:
+ * Soroban RPC's `getEvents` has a short propagation lag after ledger
+ * close, so polling in the same instant `submitAndWait` resolves can
+ * genuinely miss the event that very transaction just produced. On a
+ * host with a persistent background poller this self-heals on the
+ * next tick; on Vercel there may be no next tick until some unrelated
+ * request happens to trigger one, so the retry has to live here.
+ */
+export async function triggerIndexOnce(): Promise<void> {
+  if (running) return;
+  running = true;
+  try {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const applied = await pollOnce();
+      if (applied > 0 || attempt === 2) break;
+      await new Promise((resolve) => setTimeout(resolve, 1500));
     }
-  };
+  } catch (err) {
+    console.error("[indexer] triggered poll failed:", err);
+  } finally {
+    running = false;
+  }
+}
 
-  void tick();
-  return setInterval(tick, intervalMs);
+/**
+ * Optional on a platform that keeps one process running continuously
+ * (Railway, Render, local dev) — belt-and-suspenders in case
+ * something was submitted outside this service's own routes. Not
+ * required for correctness: see `triggerIndexOnce` above, which is
+ * what every submission path actually relies on. Harmless to call on
+ * Vercel too (each warm instance just gets an interval that may or
+ * may not survive to its next tick), just not something to depend on
+ * there.
+ */
+export function startIndexer(intervalMs: number): NodeJS.Timeout {
+  void triggerIndexOnce();
+  return setInterval(() => void triggerIndexOnce(), intervalMs);
 }

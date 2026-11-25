@@ -44,6 +44,12 @@ script polls the service's read model until it shows `"Finalized"` —
 proving the two-party on-chain flow end to end through the same API
 surface the real app will use.
 
+Optional `REGION`/`CATEGORY` env vars attach dashboard-filter
+metadata before the claim (e.g.
+`REGION=Lagos CATEGORY=donation_recovery npm start`) — neither is
+part of any on-chain auth check, see `../service/README.md`'s API
+table for `/pickups/:orderId/metadata`.
+
 ## Deferred confirm
 
 ```sh

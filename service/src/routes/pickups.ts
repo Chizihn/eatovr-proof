@@ -1,12 +1,18 @@
 import type { FastifyInstance } from "fastify";
 import { config } from "../config.js";
 import { prisma } from "../db/prisma.js";
-import type { Attestation } from "../generated/prisma/client.js";
+import { OrderCategory, type Attestation } from "../generated/prisma/client.js";
 import {
   buildClaimPickupTx,
   buildConfirmPickupTx,
   submitSignedTransaction,
 } from "../soroban/client.js";
+import { triggerIndexOnce } from "../indexer/run.js";
+
+/** The enum object (not just its TS type) exists at runtime, so an invalid query param is rejected instead of hitting Postgres as a bad enum cast. */
+function isOrderCategory(value: string): value is OrderCategory {
+  return (Object.values(OrderCategory) as string[]).includes(value);
+}
 
 function serializeAttestation(row: Attestation) {
   return {
@@ -16,6 +22,8 @@ function serializeAttestation(row: Attestation) {
     itemType: row.itemType,
     quantity: row.quantity,
     status: row.status,
+    region: row.region,
+    category: row.category,
     claimedAt: row.claimedAt,
     confirmedAt: row.confirmedAt,
     claimTxHash: row.claimTxHash,
@@ -95,12 +103,41 @@ export async function pickupRoutes(app: FastifyInstance) {
     return reply.status(201).send({ stored: true });
   });
 
+  // --- Region/category metadata, attached before claim_pickup ever
+  // runs — same timing as pre-confirm above. Neither field is part of
+  // any on-chain auth check; the indexer merges them in off
+  // `OrderMetadata` when the matching `claimed` event lands (see
+  // schema.prisma's `OrderMetadata` doc comment). ---
+  app.post<{
+    Params: { orderId: string };
+    Body: { region?: string; category?: OrderCategory };
+  }>("/pickups/:orderId/metadata", async (request, reply) => {
+    const { orderId } = request.params;
+    const { region, category } = request.body ?? {};
+    if (category && !isOrderCategory(category)) {
+      return reply.status(400).send({ error: `category must be one of ${Object.values(OrderCategory).join(", ")}` });
+    }
+
+    await prisma.orderMetadata.upsert({
+      where: { orderId },
+      create: { orderId, region, category },
+      update: { region, category },
+    });
+
+    return reply.status(201).send({ stored: true });
+  });
+
   app.post<{ Body: { xdr: string } }>("/transactions/submit", async (request, reply) => {
     const { xdr } = request.body ?? {};
     if (!xdr) {
       return reply.status(400).send({ error: "xdr is required" });
     }
     const result = await submitSignedTransaction(xdr);
+    // Index synchronously, in this same request, rather than waiting
+    // for the background poller's next tick — see triggerIndexOnce's
+    // doc comment for why this is what actually makes the serverless
+    // deploy target work, not just a nice-to-have.
+    await triggerIndexOnce();
     // BigInt return values (e.g. a u64/u128 from some other contract call
     // through this generic endpoint) aren't JSON-serializable by default.
     return {
@@ -113,10 +150,20 @@ export async function pickupRoutes(app: FastifyInstance) {
   // --- Read model, for the public dashboard and anyone checking a
   // specific claim. ---
 
-  app.get("/pickups", async () => {
-    const rows = await prisma.attestation.findMany({ orderBy: { claimedAt: "desc" } });
-    return rows.map(serializeAttestation);
-  });
+  app.get<{ Querystring: { region?: string; category?: string } }>(
+    "/pickups",
+    async (request) => {
+      const { region, category } = request.query ?? {};
+      const rows = await prisma.attestation.findMany({
+        where: {
+          ...(region ? { region } : {}),
+          ...(category && isOrderCategory(category) ? { category } : {}),
+        },
+        orderBy: { claimedAt: "desc" },
+      });
+      return rows.map(serializeAttestation);
+    },
+  );
 
   // Resolves a claim from a transaction hash — lets a caller that only
   // has a tx hash (e.g. a smart-wallet SDK whose submit result doesn't

@@ -19,7 +19,17 @@ server component that reads the Attestation Service's `/pickups` and
   unit counts, and status.
 - A table of every finalized attestation, each with links straight to
   its `claim_pickup`/`confirm_pickup` transaction on Stellar Expert,
-  and a "Sponsored" badge on orders funded through Sponsor Food.
+  a "Sponsored" badge on orders funded through Sponsor Food, and a
+  filter by region and by commercial-vs-donation-recovery (a GET form,
+  server-rendered via `searchParams` — no client JS needed). Neither
+  field exists on-chain; see `service/README.md`'s API table for
+  `/pickups/:orderId/metadata`.
+- Two time-series charts (meals rescued per day, sponsorships per
+  day, last 14 days) — `components/shared/time-series-chart.tsx`,
+  built per the `dataviz` skill's procedure: single-series bar charts
+  (small multiples, never one dual-axis chart), reusing the app's own
+  `--primary`/`--chart-4` tokens rather than a new palette, per-bar
+  hover tooltip, no legend.
 - An error state if the service is unreachable, rather than a blank
   or broken page.
 - `app/sponsor/page.tsx` — the Sponsor Food donor page: a tier picker,

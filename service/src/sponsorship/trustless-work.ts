@@ -30,6 +30,11 @@ import { config } from "../config.js";
  * one escrow per *unit*, not one per batch.
  */
 
+/** Every escrow in this design has exactly one milestone — see `deployUnitEscrow` — so it's always index 0. */
+const SOLE_MILESTONE_INDEX = "0";
+/** Trustless Work's own milestone-status literal, their protocol constant, named here rather than inlined. */
+const TRUSTLESS_WORK_MILESTONE_STATUS_COMPLETED = "completed";
+
 function requireApiKey(): string {
   if (!config.trustlessWorkApiKey) {
     throw new Error(
@@ -130,8 +135,8 @@ export async function completeUnitMilestone(params: {
 }): Promise<{ unsignedTransaction: string }> {
   return post<{ unsignedTransaction: string }>("/escrow/single-release/change-milestone-status", {
     contractId: params.contractId,
-    milestoneIndex: "0",
-    newStatus: "completed",
+    milestoneIndex: SOLE_MILESTONE_INDEX,
+    newStatus: TRUSTLESS_WORK_MILESTONE_STATUS_COMPLETED,
     newEvidence: params.evidence,
     serviceProvider: params.platformPublicKey,
   });
@@ -143,7 +148,7 @@ export async function approveUnitMilestone(params: {
 }): Promise<{ unsignedTransaction: string }> {
   return post<{ unsignedTransaction: string }>("/escrow/single-release/approve-milestone", {
     contractId: params.contractId,
-    milestoneIndex: "0",
+    milestoneIndex: SOLE_MILESTONE_INDEX,
     approver: params.platformPublicKey,
   });
 }

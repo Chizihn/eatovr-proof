@@ -1,9 +1,26 @@
 const SERVICE_URL = process.env.SERVICE_URL ?? "http://localhost:3900";
 
+/** Mirrors service/prisma/schema.prisma's `SponsorshipUnitStatus` enum — see lib/attestations.ts's `AttestationStatus` comment for why this is a hand-kept mirror, not a shared type. */
+export const SponsorshipUnitStatus = {
+  Pending: "Pending",
+  Available: "Available",
+  Claimed: "Claimed",
+  Redeemed: "Redeemed",
+} as const;
+export type SponsorshipUnitStatus = (typeof SponsorshipUnitStatus)[keyof typeof SponsorshipUnitStatus];
+
+/** Mirrors service/prisma/schema.prisma's `SponsorshipBatchStatus` enum. */
+export const SponsorshipBatchStatus = {
+  Funding: "Funding",
+  Active: "Active",
+  Depleted: "Depleted",
+} as const;
+export type SponsorshipBatchStatus = (typeof SponsorshipBatchStatus)[keyof typeof SponsorshipBatchStatus];
+
 export type SponsorshipUnit = {
   id: string;
   index: number;
-  status: "Pending" | "Available" | "Claimed" | "Redeemed";
+  status: SponsorshipUnitStatus;
   escrowContractId: string | null;
   fundingTxHash: string | null;
   releaseTxHash: string | null;
@@ -17,7 +34,7 @@ export type SponsorshipBatch = {
   unitCount: number;
   unitValueUsdc: string;
   reflectorUsdPrice: string | null;
-  status: "Funding" | "Active" | "Depleted";
+  status: SponsorshipBatchStatus;
   createdAt: string;
   available: number;
   claimed: number;

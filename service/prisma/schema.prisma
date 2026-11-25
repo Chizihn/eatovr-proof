@@ -7,6 +7,32 @@ datasource db {
   provider = "postgresql"
 }
 
+enum AttestationStatus {
+  Pending
+  Finalized
+}
+
+// Neither the contract nor any on-chain event carries this — see
+// `Attestation.category`'s own comment for why it's descriptive
+// metadata, not an on-chain fact.
+enum OrderCategory {
+  commercial
+  donation_recovery
+}
+
+enum SponsorshipBatchStatus {
+  Funding
+  Active
+  Depleted
+}
+
+enum SponsorshipUnitStatus {
+  Pending
+  Available
+  Claimed
+  Redeemed
+}
+
 // The read model. Source of truth is always the chain; this table is
 // rebuilt from `claimed`/`finalized` contract events by the indexer, never
 // written to directly by the relay routes.
@@ -23,7 +49,16 @@ model Attestation {
   recipient     String
   itemType      String    @map("item_type")
   quantity      Int
-  status        String // "Pending" | "Finalized"
+  status        AttestationStatus
+  // Neither the contract nor any on-chain event carries these — the
+  // two-party claim/confirm is deliberately minimal. Both are
+  // descriptive metadata attached at claim time (see
+  // `OrderMetadata` below for how, since the indexer only ever reads
+  // these two fields off a `claimed` event, not off the request that
+  // built the claim transaction) and are never part of what either
+  // party's on-chain auth check actually verifies.
+  region        String?
+  category      OrderCategory @default(commercial)
   claimedAt     DateTime  @map("claimed_at")
   confirmedAt   DateTime? @map("confirmed_at")
   claimTxHash   String    @map("claim_tx_hash")
@@ -32,6 +67,22 @@ model Attestation {
   updatedAt     DateTime  @updatedAt @map("updated_at")
 
   @@map("attestations")
+}
+
+// Region/category for an order, attached *before* `claim_pickup` ever
+// runs (the real app would call this at checkout, same timing as
+// `PendingConfirmation` below) — stored here because the indexer only
+// ever learns about an order from its on-chain `claimed` event, which
+// carries none of this. Looked up by `orderId` and merged in when
+// that event lands (see `indexer/run.ts`'s `applyEvent`), then no
+// longer needed.
+model OrderMetadata {
+  orderId   String         @id @map("order_id")
+  region    String?
+  category  OrderCategory?
+  createdAt DateTime       @default(now()) @map("created_at")
+
+  @@map("order_metadata")
 }
 
 // A recipient's `confirm_pickup` authorization, signed with their
@@ -93,6 +144,11 @@ model SponsorshipBatch {
   id              String    @id @default(uuid())
   donorPublicKey  String    @map("donor_public_key")
   region          String? // optional targeting; null = anywhere Eatovr operates
+  // "NGN" or "GHS" — the Buildathon's two target markets (see
+  // sponsorship/tiers.ts's doc comment). Chosen by the donor at
+  // creation, not inferred from `region`, since a batch can target no
+  // specific region at all.
+  currency        String    @default("NGN")
   unitCount       Int       @map("unit_count")
   unitValueUsdc   String    @map("unit_value_usdc") // decimal string, e.g. "2.0000000"
   // The USD/USDC sanity-check read taken from Reflector's CEX/DEX feed
@@ -101,7 +157,7 @@ model SponsorshipBatch {
   // rate (see sponsorship/tiers.ts) because Reflector's Fiat FX feed
   // has no NGN pair at all, verified live against testnet.
   reflectorUsdPrice String? @map("reflector_usd_price")
-  status          String    @default("Funding") @map("status") // "Funding" | "Active" | "Depleted"
+  status          SponsorshipBatchStatus @default(Funding)
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt @map("updated_at")
 
@@ -120,7 +176,7 @@ model SponsorshipUnit {
   batchId          String    @map("batch_id")
   batch            SponsorshipBatch @relation(fields: [batchId], references: [id])
   index            Int
-  status           String    @default("Pending") // "Pending" | "Available" | "Claimed" | "Redeemed"
+  status           SponsorshipUnitStatus @default(Pending)
   escrowContractId String?   @map("escrow_contract_id")
   fundingTxHash    String?   @map("funding_tx_hash")
   // Set once a customer claims this unit in the demo "claim a
@@ -131,6 +187,12 @@ model SponsorshipUnit {
   releaseTxHash    String?   @map("release_tx_hash")
   releasedAt       DateTime? @map("released_at")
   releaseError     String?   @map("release_error")
+  // Set once the real Eatovr backend has acknowledged the release
+  // webhook (see sponsorship/service.ts's `notifyBackendOfRelease`) and
+  // can pay the fulfilling vendor. Swept and retried by the indexer
+  // every poll until set — same pattern as the escrow release itself —
+  // so a transient backend outage never silently strands a payout.
+  backendNotifiedAt DateTime? @map("backend_notified_at")
   createdAt        DateTime  @default(now()) @map("created_at")
   updatedAt        DateTime  @updatedAt @map("updated_at")
 

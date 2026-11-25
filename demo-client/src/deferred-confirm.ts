@@ -7,6 +7,7 @@ import {
   rpc,
   xdr,
 } from "@stellar/stellar-sdk";
+import { AttestationStatus } from "./constants.js";
 
 const SERVICE_URL = process.env.SERVICE_URL ?? "http://localhost:3900";
 const SOROBAN_RPC_URL = process.env.SOROBAN_RPC_URL ?? "https://soroban-testnet.stellar.org";
@@ -176,10 +177,10 @@ async function main() {
   );
   for (let attempt = 0; attempt < 15; attempt++) {
     await new Promise((resolve) => setTimeout(resolve, 2000));
-    const row = await getJson<{ status: string; confirmTxHash?: string }>(
+    const row = await getJson<{ status: AttestationStatus; confirmTxHash?: string }>(
       `/pickups/${orderId}`,
     ).catch(() => null);
-    if (row?.status === "Finalized") {
+    if (row?.status === AttestationStatus.Finalized) {
       console.log(
         `   Finalized automatically — no recipient action after step 1. confirm tx=${row.confirmTxHash}`,
       );

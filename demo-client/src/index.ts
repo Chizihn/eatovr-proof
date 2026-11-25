@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Keypair, TransactionBuilder } from "@stellar/stellar-sdk";
+import { AttestationStatus, OrderCategory } from "./constants.js";
 
 const SERVICE_URL = process.env.SERVICE_URL ?? "http://localhost:3900";
 const NETWORK_PASSPHRASE =
@@ -67,6 +68,19 @@ async function main() {
   const orderId = `demo-order-${randomUUID()}`;
   console.log(`order: ${orderId}`);
 
+  // Region/category are descriptive metadata, not part of any
+  // on-chain auth check — neither the contract nor the `claimed`
+  // event carries them. REGION/CATEGORY let this script demonstrate
+  // the dashboard's filters with real, varied data instead of every
+  // demo order looking identical. Optional: a plain `npm start` still
+  // works with neither set.
+  const region = process.env.REGION;
+  const category = process.env.CATEGORY as OrderCategory | undefined;
+  if (region || category) {
+    console.log(`\n0. Attaching metadata (region=${region ?? "—"}, category=${category ?? OrderCategory.commercial})...`);
+    await postJson(`/pickups/${orderId}/metadata`, { region, category });
+  }
+
   console.log("\n1. Vendor claims a pickup...");
   const claimPrepare = await postJson<{ xdr: string }>(`/pickups/${orderId}/claim/prepare`, {
     vendorPublicKey: vendor.publicKey(),
@@ -96,8 +110,8 @@ async function main() {
   console.log("\n3. Waiting for the indexer to pick it up in the read model...");
   for (let attempt = 0; attempt < 10; attempt++) {
     await new Promise((resolve) => setTimeout(resolve, 2000));
-    const row = await getJson<{ status: string }>(`/pickups/${orderId}`).catch(() => null);
-    if (row?.status === "Finalized") {
+    const row = await getJson<{ status: AttestationStatus }>(`/pickups/${orderId}`).catch(() => null);
+    if (row?.status === AttestationStatus.Finalized) {
       console.log("   read model shows Finalized:", row);
       return;
     }

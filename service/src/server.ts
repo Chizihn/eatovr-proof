@@ -1,5 +1,6 @@
 import { setDefaultResultOrder } from "node:dns";
 import Fastify from "fastify";
+import cors from "@fastify/cors";
 import { config } from "./config.js";
 
 // Node's fetch (undici) can intermittently try an IPv6 route to
@@ -14,6 +15,14 @@ import { sponsorshipRoutes } from "./routes/sponsorships.js";
 import { startIndexer } from "./indexer/run.js";
 
 const app = Fastify({ logger: true });
+
+// Everything here is a public read model or requires a wallet
+// signature to mutate anything — there's no cookie/session auth to
+// protect, so allowing any origin is fine. Needed because the
+// dashboard's /sponsor page calls this service directly from the
+// browser (the wallet-signing flow), and dashboard + service live on
+// different domains once both are deployed.
+await app.register(cors, { origin: true });
 
 app.get("/health", async () => ({ ok: true }));
 

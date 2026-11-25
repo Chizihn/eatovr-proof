@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { relaySignedXdr, relayFuncAndAuth } from "../soroban/relayer.js";
+import { triggerIndexOnce } from "../indexer/run.js";
 
 /**
  * Implements the plain HTTP "relayer" contract smart-account-kit (and
@@ -29,10 +30,14 @@ export async function relayerRoutes(app: FastifyInstance) {
       try {
         if (xdr) {
           const result = await relaySignedXdr(xdr);
+          // Same reasoning as /transactions/submit — index synchronously
+          // rather than depending on the background poller's next tick.
+          await triggerIndexOnce();
           return { success: true, hash: result.hash, status: result.status };
         }
         if (func && auth) {
           const result = await relayFuncAndAuth(func, auth);
+          await triggerIndexOnce();
           return { success: true, hash: result.hash, status: result.status };
         }
         return reply
